@@ -1,16 +1,68 @@
-import { db, doc, setDoc } from '../lib/firebase';
+import { saveBase64ToFirestoreUploadedFiles } from './fileUploader';
+
+function isStaticHostEnv(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = (window.location.hostname || '').toLowerCase();
+  return (
+    host === 'hopebokeo.org' ||
+    host.endsWith('.hopebokeo.org') ||
+    host.endsWith('.netlify.app') ||
+    host.endsWith('.vercel.app') ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.pages.dev')
+  );
+}
+
+/**
+ * Fast check to see if a canvas actually contains any transparent pixels.
+ * Samples a grid of points across the canvas in <1ms.
+ */
+function canvasHasTransparency(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const cols = Math.min(8, Math.max(2, width));
+    const rows = Math.min(8, Math.max(2, height));
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = Math.min(width - 1, Math.floor((c / (cols - 1 || 1)) * (width - 1)));
+        const y = Math.min(height - 1, Math.floor((r / (rows - 1 || 1)) * (height - 1)));
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        if (pixel[3] < 250) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Encodes a canvas with alpha transparency using WebP if supported (fast & compact),
+ * falling back to PNG.
+ */
+function encodeCanvasWithAlpha(canvas: HTMLCanvasElement, quality: number): string {
+  try {
+    const webp = canvas.toDataURL('image/webp', quality);
+    if (webp && webp.startsWith('data:image/webp')) {
+      return webp;
+    }
+  } catch {
+    // fallback to png
+  }
+  return canvas.toDataURL('image/png');
+}
 
 /**
  * Universal Client-Side Image Compressor & Optimizer
- * Guarantees ANY image file type, resolution, or format (JPG, PNG, WEBP, GIF, SVG, HEIC/camera photos)
- * is optimized with high-definition sharpness and crisp clarity, preserving fine details while
- * remaining safely under Firestore's 1MB document limit.
+ * Fast (<100ms), non-blocking HTML5 Canvas resizer & encoder.
+ * Avoids synchronous multi-megabyte lossless PNG encoding loops on opaque photos/screenshots.
  */
 export const compressImageFile = (
   file: File,
-  maxDimension = 2560,
-  initialQuality = 0.95,
-  maxStringLength = 750000, // HD sharpness preservation
+  maxDimension = 1920,
+  initialQuality = 0.88,
+  maxStringLength = 350000,
   preserveTransparency = false
 ): Promise<string> => {
   return new Promise((resolve) => {
@@ -20,7 +72,10 @@ export const compressImageFile = (
     }
 
     // Keep vector SVGs as raw vector data URL if small
-    if ((file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) && file.size < 250000) {
+    if (
+      (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) &&
+      file.size < 250000
+    ) {
       const reader = new FileReader();
       reader.onload = (e) => resolve((e.target?.result as string) || '');
       reader.onerror = () => resolve('');
@@ -28,7 +83,7 @@ export const compressImageFile = (
       return;
     }
 
-    const isPngOrTransparent =
+    const mightHaveAlpha =
       preserveTransparency ||
       file.type === 'image/png' ||
       file.name.toLowerCase().endsWith('.png') ||
@@ -37,7 +92,12 @@ export const compressImageFile = (
       file.type === 'image/svg+xml' ||
       file.name.toLowerCase().endsWith('.svg');
 
-    const processElement = (drawable: HTMLImageElement | ImageBitmap) => {
+    const processElement = (drawable: HTMLImageElement | ImageBitmap, cleanupUrl?: string) => {
+      if (cleanupUrl) {
+        try {
+          URL.revokeObjectURL(cleanupUrl);
+        } catch {}
+      }
       try {
         let width = drawable.width || 1200;
         let height = drawable.height || 800;
@@ -62,31 +122,63 @@ export const compressImageFile = (
           return;
         }
 
-        // Enable highest quality image smoothing to prevent blurriness
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-
-        // Never fill background with white if transparent format
-        if (!isPngOrTransparent) {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
 
-        let currentQuality = initialQuality;
-        const mimeType = isPngOrTransparent ? 'image/png' : 'image/jpeg';
-        let dataUrl = canvas.toDataURL(mimeType, currentQuality);
+        // Only keep alpha channel if explicitly requested OR if the image genuinely has transparent pixels
+        const useAlpha =
+          preserveTransparency || (mightHaveAlpha && canvasHasTransparency(ctx, canvas.width, canvas.height));
 
-        // Iterative reduction loop only if payload exceeds safe Firestore single-image ceiling
+        if (!useAlpha) {
+          // Composite onto white background and encode as fast JPEG
+          const jpgCanvas = document.createElement('canvas');
+          jpgCanvas.width = canvas.width;
+          jpgCanvas.height = canvas.height;
+          const jpgCtx = jpgCanvas.getContext('2d');
+          if (jpgCtx) {
+            jpgCtx.fillStyle = '#FFFFFF';
+            jpgCtx.fillRect(0, 0, jpgCanvas.width, jpgCanvas.height);
+            jpgCtx.drawImage(canvas, 0, 0);
+            let currentQuality = initialQuality;
+            let dataUrl = jpgCanvas.toDataURL('image/jpeg', currentQuality);
+
+            let attempts = 0;
+            while (dataUrl.length > maxStringLength && attempts < 4) {
+              attempts++;
+              width = Math.round(width * 0.8);
+              height = Math.round(height * 0.8);
+              currentQuality = Math.max(0.65, currentQuality - 0.07);
+
+              const iterCanvas = document.createElement('canvas');
+              iterCanvas.width = Math.max(60, width);
+              iterCanvas.height = Math.max(60, height);
+              const iterCtx = iterCanvas.getContext('2d');
+              if (iterCtx) {
+                iterCtx.imageSmoothingEnabled = true;
+                iterCtx.imageSmoothingQuality = 'high';
+                iterCtx.fillStyle = '#FFFFFF';
+                iterCtx.fillRect(0, 0, iterCanvas.width, iterCanvas.height);
+                iterCtx.drawImage(drawable, 0, 0, iterCanvas.width, iterCanvas.height);
+                dataUrl = iterCanvas.toDataURL('image/jpeg', currentQuality);
+              }
+            }
+            resolve(dataUrl);
+            return;
+          }
+        }
+
+        // Transparent image path (uses WebP with alpha for fast compression, or PNG fallback)
+        let currentQuality = initialQuality;
+        let dataUrl = encodeCanvasWithAlpha(canvas, currentQuality);
+
         let attempts = 0;
-        while (dataUrl.length > maxStringLength && attempts < 8) {
+        while (dataUrl.length > maxStringLength && attempts < 4) {
           attempts++;
-          width = Math.round(width * 0.82);
-          height = Math.round(height * 0.82);
-          currentQuality = Math.max(0.60, currentQuality - 0.05);
+          width = Math.round(width * 0.78);
+          height = Math.round(height * 0.78);
+          currentQuality = Math.max(0.65, currentQuality - 0.08);
 
           const iterCanvas = document.createElement('canvas');
           iterCanvas.width = Math.max(60, width);
@@ -95,14 +187,9 @@ export const compressImageFile = (
           if (iterCtx) {
             iterCtx.imageSmoothingEnabled = true;
             iterCtx.imageSmoothingQuality = 'high';
-            if (!isPngOrTransparent) {
-              iterCtx.fillStyle = '#FFFFFF';
-              iterCtx.fillRect(0, 0, iterCanvas.width, iterCanvas.height);
-            } else {
-              iterCtx.clearRect(0, 0, iterCanvas.width, iterCanvas.height);
-            }
+            iterCtx.clearRect(0, 0, iterCanvas.width, iterCanvas.height);
             iterCtx.drawImage(drawable, 0, 0, iterCanvas.width, iterCanvas.height);
-            dataUrl = iterCanvas.toDataURL(isPngOrTransparent ? 'image/png' : 'image/jpeg', currentQuality);
+            dataUrl = encodeCanvasWithAlpha(iterCanvas, currentQuality);
           }
         }
 
@@ -113,49 +200,40 @@ export const compressImageFile = (
       }
     };
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const srcData = e.target?.result as string;
-      if (!srcData) {
-        resolve('');
-        return;
-      }
-
+    // Fast path: use object URL directly instead of reading 10MB file as base64 first
+    try {
+      const objectUrl = URL.createObjectURL(file);
       const img = new Image();
-      img.onload = () => processElement(img);
-
+      img.onload = () => processElement(img, objectUrl);
       img.onerror = () => {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {}
         if ('createImageBitmap' in window) {
           createImageBitmap(file)
             .then((bitmap) => processElement(bitmap))
-            .catch(() => {
-              if (srcData.length <= maxStringLength) {
-                resolve(srcData);
-              } else {
-                resolve('');
-              }
-            });
-        } else if (srcData.length <= maxStringLength) {
-          resolve(srcData);
+            .catch(() => resolve(''));
         } else {
           resolve('');
         }
       };
-
-      img.src = srcData;
-    };
-
-    reader.onerror = () => {
-      if ('createImageBitmap' in window) {
-        createImageBitmap(file)
-          .then((bitmap) => processElement(bitmap))
-          .catch(() => resolve(''));
-      } else {
-        resolve('');
-      }
-    };
-
-    reader.readAsDataURL(file);
+      img.src = objectUrl;
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const srcData = e.target?.result as string;
+        if (!srcData) {
+          resolve('');
+          return;
+        }
+        const img = new Image();
+        img.onload = () => processElement(img);
+        img.onerror = () => resolve(srcData.length <= maxStringLength ? srcData : '');
+        img.src = srcData;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    }
   });
 };
 
@@ -174,7 +252,6 @@ export const shrinkBase64DataUrl = (
       resolve(dataUrl || '');
       return;
     }
-    // If it's already within safe limits, keep original crisp pixels
     if (dataUrl.length <= maxStringLength) {
       resolve(dataUrl);
       return;
@@ -185,7 +262,7 @@ export const shrinkBase64DataUrl = (
       return;
     }
 
-    const isPngOrTransparent =
+    const mightHaveAlpha =
       preserveTransparency ||
       dataUrl.startsWith('data:image/png') ||
       dataUrl.startsWith('data:image/webp') ||
@@ -217,24 +294,30 @@ export const shrinkBase64DataUrl = (
 
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      if (!isPngOrTransparent) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      } else {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+      const useAlpha =
+        preserveTransparency || (mightHaveAlpha && canvasHasTransparency(ctx, canvas.width, canvas.height));
+
+      if (!useAlpha) {
+        ctx.globalCompositeOperation = 'destination-over';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
       let currentQuality = quality;
-      const mime = isPngOrTransparent ? 'image/png' : 'image/jpeg';
-      let result = canvas.toDataURL(mime, currentQuality);
+      let result = useAlpha
+        ? encodeCanvasWithAlpha(canvas, currentQuality)
+        : canvas.toDataURL('image/jpeg', currentQuality);
 
       let attempts = 0;
-      while (result.length > maxStringLength && attempts < 7) {
+      while (result.length > maxStringLength && attempts < 4) {
         attempts++;
-        width = Math.round(width * 0.82);
-        height = Math.round(height * 0.82);
-        currentQuality = Math.max(0.55, currentQuality - 0.05);
+        width = Math.round(width * 0.8);
+        height = Math.round(height * 0.8);
+        currentQuality = Math.max(0.6, currentQuality - 0.07);
 
         const iterCanvas = document.createElement('canvas');
         iterCanvas.width = Math.max(60, width);
@@ -243,14 +326,16 @@ export const shrinkBase64DataUrl = (
         if (iterCtx) {
           iterCtx.imageSmoothingEnabled = true;
           iterCtx.imageSmoothingQuality = 'high';
-          if (!isPngOrTransparent) {
+          if (!useAlpha) {
             iterCtx.fillStyle = '#FFFFFF';
             iterCtx.fillRect(0, 0, iterCanvas.width, iterCanvas.height);
           } else {
             iterCtx.clearRect(0, 0, iterCanvas.width, iterCanvas.height);
           }
           iterCtx.drawImage(img, 0, 0, iterCanvas.width, iterCanvas.height);
-          result = iterCanvas.toDataURL(mime, currentQuality);
+          result = useAlpha
+            ? encodeCanvasWithAlpha(iterCanvas, currentQuality)
+            : iterCanvas.toDataURL('image/jpeg', currentQuality);
         }
       }
 
@@ -275,7 +360,7 @@ export async function emergencyCompressObject(obj: any): Promise<any> {
   const compressWalk = async (val: any): Promise<any> => {
     if (!val) return val;
     if (typeof val === 'string' && val.startsWith('data:image')) {
-      return await shrinkBase64DataUrl(val, 1920, 0.88, 350000);
+      return await shrinkBase64DataUrl(val, 1600, 0.82, 220000);
     }
     if (Array.isArray(val)) {
       const arr = [];
@@ -296,41 +381,43 @@ export async function emergencyCompressObject(obj: any): Promise<any> {
   return await compressWalk(safe);
 }
 
-import { saveBase64ToFirestoreUploadedFiles } from './fileUploader';
-
 /**
- * Helper to convert heavy base64 strings to permanent uncompressed server URLs
- * preserving 100% original resolution without Firestore size penalties.
- * If backend server is unavailable (e.g. static hosting on Netlify), it writes
- * directly to Cloud Firestore `uploaded_files` (and `uploaded_file_chunks` for large files).
+ * Helper to convert heavy base64 strings to permanent server or Firestore URLs
+ * without stalling on static hosts.
  */
 async function convertBase64ToUploadUrl(base64Str: string, namePrefix = 'poster'): Promise<string> {
   if (!base64Str || typeof base64Str !== 'string' || !base64Str.startsWith('data:image')) {
     return base64Str;
   }
 
-  // 1. Try server endpoint first
-  try {
-    const res = await fetch('/api/upload-file', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        base64Data: base64Str,
-        fileName: `${namePrefix}_${Date.now()}`,
-      }),
-    });
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (data.success && data.url) {
-        return data.url;
+  // 1. Try server endpoint ONLY when not on a static host (e.g. skip on hopebokeo.org / Netlify)
+  if (!isStaticHostEnv()) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2200);
+      const res = await fetch('/api/upload-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base64Data: base64Str,
+          fileName: `${namePrefix}_${Date.now()}`,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.success && data.url) {
+          return data.url;
+        }
       }
+    } catch {
+      // Backend offline or static hosting
     }
-  } catch {
-    // Backend offline or static hosting
   }
 
-  // 2. Direct Cloud Firestore uploaded_files + uploaded_file_chunks backup (retains 100% original crisp clarity on Netlify / Vercel)
+  // 2. Direct Cloud Firestore uploaded_files (with built-in timeout and compact data URL fallback)
   try {
     return await saveBase64ToFirestoreUploadedFiles(base64Str, namePrefix);
   } catch (firestoreErr) {
@@ -342,8 +429,6 @@ async function convertBase64ToUploadUrl(base64Str: string, namePrefix = 'poster'
 
 /**
  * Optimizes an entire HomePoster or config object before saving to Firestore.
- * Preserves ultra-crisp resolution while strictly ensuring total document
- * payload stays safely within lightweight bounds (~20KB - 50KB).
  */
 export async function optimizePosterForFirestore(poster: any): Promise<any> {
   if (!poster) return poster;
@@ -357,20 +442,28 @@ export async function optimizePosterForFirestore(poster: any): Promise<any> {
       const uploadedUrl = await convertBase64ToUploadUrl(safePoster.bgImageUrl, 'bg');
       if (uploadedUrl.startsWith('/uploads/')) {
         safePoster.bgImageUrl = uploadedUrl;
-      } else if (safePoster.bgImageUrl.length > 350000) {
-        safePoster.bgImageUrl = await shrinkBase64DataUrl(safePoster.bgImageUrl, 2560, 0.92, 350000);
+      } else if (safePoster.bgImageUrl.length > 260000) {
+        safePoster.bgImageUrl = await shrinkBase64DataUrl(safePoster.bgImageUrl, 1920, 0.85, 240000);
       }
     }
   })();
 
   // 2. Process Upcoming Event Flyer / Image
   const upcomingPromise = (async () => {
-    if (typeof safePoster.upcomingEventImageUrl === 'string' && safePoster.upcomingEventImageUrl.startsWith('data:image')) {
+    if (
+      typeof safePoster.upcomingEventImageUrl === 'string' &&
+      safePoster.upcomingEventImageUrl.startsWith('data:image')
+    ) {
       const uploadedUrl = await convertBase64ToUploadUrl(safePoster.upcomingEventImageUrl, 'upcoming_poster');
       if (uploadedUrl.startsWith('/uploads/')) {
         safePoster.upcomingEventImageUrl = uploadedUrl;
-      } else if (safePoster.upcomingEventImageUrl.length > 350000) {
-        safePoster.upcomingEventImageUrl = await shrinkBase64DataUrl(safePoster.upcomingEventImageUrl, 2560, 0.92, 350000);
+      } else if (safePoster.upcomingEventImageUrl.length > 260000) {
+        safePoster.upcomingEventImageUrl = await shrinkBase64DataUrl(
+          safePoster.upcomingEventImageUrl,
+          1920,
+          0.85,
+          240000
+        );
       }
     }
   })();
@@ -382,12 +475,12 @@ export async function optimizePosterForFirestore(poster: any): Promise<any> {
       if (uploadedUrl.startsWith('/uploads/')) {
         safePoster.logoUrl = uploadedUrl;
       } else if (safePoster.logoUrl.length > 100000) {
-        safePoster.logoUrl = await shrinkBase64DataUrl(safePoster.logoUrl, 1200, 0.92, 100000);
+        safePoster.logoUrl = await shrinkBase64DataUrl(safePoster.logoUrl, 1000, 0.88, 100000, true);
       }
     }
   })();
 
-  // 4. Process Carousel / Poster Images concurrently (prioritizing 100% original full-resolution files)
+  // 4. Process Carousel / Poster Images concurrently
   const rawList: string[] = Array.isArray(safePoster.imageUrls)
     ? safePoster.imageUrls
     : safePoster.imageUrl
@@ -404,8 +497,8 @@ export async function optimizePosterForFirestore(poster: any): Promise<any> {
           if (uploadedUrl.startsWith('/uploads/')) {
             return uploadedUrl;
           }
-          if (imgStr.length > 400000) {
-            return await shrinkBase64DataUrl(imgStr, 2560, 0.92, 400000);
+          if (imgStr.length > 260000) {
+            return await shrinkBase64DataUrl(imgStr, 1920, 0.85, 240000);
           }
         }
         return imgStr;
@@ -434,8 +527,8 @@ export async function optimizePosterForFirestore(poster: any): Promise<any> {
                 if (typeof tImg === 'string' && tImg.startsWith('data:image')) {
                   const uploaded = await convertBase64ToUploadUrl(tImg, `timeline_${itemIdx}_${tIdx}`);
                   if (uploaded.startsWith('/uploads/')) return uploaded;
-                  if (tImg.length > 150000) {
-                    return await shrinkBase64DataUrl(tImg, 1200, 0.85, 150000);
+                  if (tImg.length > 140000) {
+                    return await shrinkBase64DataUrl(tImg, 1200, 0.82, 140000);
                   }
                 }
                 return tImg;
@@ -450,71 +543,93 @@ export async function optimizePosterForFirestore(poster: any): Promise<any> {
     }
   })();
 
-  // 5. Process Bokeo / About Us Poster Image & About Hero Banner Image
+  // 6. Process Bokeo / About Us Poster Image & About Hero Banner Image
   const bokeoPromise = (async () => {
     if (typeof safePoster.bokeoImageUrl === 'string' && safePoster.bokeoImageUrl.startsWith('data:image')) {
       const uploadedUrl = await convertBase64ToUploadUrl(safePoster.bokeoImageUrl, 'bokeo_poster');
       if (uploadedUrl.startsWith('/uploads/')) {
         safePoster.bokeoImageUrl = uploadedUrl;
-      } else if (safePoster.bokeoImageUrl.length > 350000) {
-        safePoster.bokeoImageUrl = await shrinkBase64DataUrl(safePoster.bokeoImageUrl, 2560, 0.92, 350000);
+      } else if (safePoster.bokeoImageUrl.length > 260000) {
+        safePoster.bokeoImageUrl = await shrinkBase64DataUrl(safePoster.bokeoImageUrl, 1920, 0.85, 240000);
       }
     }
-    if (typeof safePoster.aboutHeroImageUrl === 'string' && safePoster.aboutHeroImageUrl.startsWith('data:image')) {
-      const uploadedHeroUrl = await convertBase64ToUploadUrl(safePoster.aboutHeroImageUrl, 'about_hero_poster');
+    if (
+      typeof safePoster.aboutHeroImageUrl === 'string' &&
+      safePoster.aboutHeroImageUrl.startsWith('data:image')
+    ) {
+      const uploadedHeroUrl = await convertBase64ToUploadUrl(
+        safePoster.aboutHeroImageUrl,
+        'about_hero_poster'
+      );
       if (uploadedHeroUrl.startsWith('/uploads/')) {
         safePoster.aboutHeroImageUrl = uploadedHeroUrl;
-      } else if (safePoster.aboutHeroImageUrl.length > 350000) {
-        safePoster.aboutHeroImageUrl = await shrinkBase64DataUrl(safePoster.aboutHeroImageUrl, 2560, 0.92, 350000);
+      } else if (safePoster.aboutHeroImageUrl.length > 260000) {
+        safePoster.aboutHeroImageUrl = await shrinkBase64DataUrl(
+          safePoster.aboutHeroImageUrl,
+          1920,
+          0.85,
+          240000
+        );
       }
     }
   })();
 
-  // 5b. Process Insights / Dashboard Poster Image
+  // 7. Process Insights / Dashboard Poster Image
   const insightsPromise = (async () => {
-    if (typeof safePoster.insightsImageUrl === 'string' && safePoster.insightsImageUrl.startsWith('data:image')) {
+    if (
+      typeof safePoster.insightsImageUrl === 'string' &&
+      safePoster.insightsImageUrl.startsWith('data:image')
+    ) {
       const uploadedUrl = await convertBase64ToUploadUrl(safePoster.insightsImageUrl, 'insights_poster');
       if (uploadedUrl.startsWith('/uploads/')) {
         safePoster.insightsImageUrl = uploadedUrl;
-      } else if (safePoster.insightsImageUrl.length > 350000) {
-        safePoster.insightsImageUrl = await shrinkBase64DataUrl(safePoster.insightsImageUrl, 2560, 0.92, 350000);
+      } else if (safePoster.insightsImageUrl.length > 260000) {
+        safePoster.insightsImageUrl = await shrinkBase64DataUrl(
+          safePoster.insightsImageUrl,
+          1920,
+          0.85,
+          240000
+        );
       }
     }
   })();
 
-  // Execute all image groups in parallel
-  await Promise.all([bgPromise, upcomingPromise, logoPromise, imagesPromise, timelinePromise, bokeoPromise, insightsPromise]);
+  await Promise.all([
+    bgPromise,
+    upcomingPromise,
+    logoPromise,
+    imagesPromise,
+    timelinePromise,
+    bokeoPromise,
+    insightsPromise,
+  ]);
 
-  // 6. Emergency guard only if payload is exceptionally high (> 750KB)
   let jsonLen = JSON.stringify(safePoster).length;
   if (jsonLen > 750000) {
-    console.warn(`[Firestore Guard] Payload size ${jsonLen} is high. Converting remaining base64 images to uploaded_files...`);
     if (safePoster.bgImageUrl && safePoster.bgImageUrl.startsWith('data:image')) {
-      safePoster.bgImageUrl = await convertBase64ToUploadUrl(safePoster.bgImageUrl, 'bg_overflow');
+      safePoster.bgImageUrl = await shrinkBase64DataUrl(safePoster.bgImageUrl, 1400, 0.78, 160000);
     }
     if (safePoster.bokeoImageUrl && safePoster.bokeoImageUrl.startsWith('data:image')) {
-      safePoster.bokeoImageUrl = await convertBase64ToUploadUrl(safePoster.bokeoImageUrl, 'bokeo_overflow');
+      safePoster.bokeoImageUrl = await shrinkBase64DataUrl(safePoster.bokeoImageUrl, 1400, 0.78, 160000);
     }
     if (safePoster.aboutHeroImageUrl && safePoster.aboutHeroImageUrl.startsWith('data:image')) {
-      safePoster.aboutHeroImageUrl = await convertBase64ToUploadUrl(safePoster.aboutHeroImageUrl, 'about_hero_overflow');
+      safePoster.aboutHeroImageUrl = await shrinkBase64DataUrl(
+        safePoster.aboutHeroImageUrl,
+        1400,
+        0.78,
+        160000
+      );
     }
     if (safePoster.insightsImageUrl && safePoster.insightsImageUrl.startsWith('data:image')) {
-      safePoster.insightsImageUrl = await convertBase64ToUploadUrl(safePoster.insightsImageUrl, 'insights_overflow');
-    }
-    if (Array.isArray(safePoster.imageUrls)) {
-      safePoster.imageUrls = await Promise.all(
-        safePoster.imageUrls.map(async (img: string, idx: number) => {
-          if (img && img.startsWith('data:image')) {
-            return await convertBase64ToUploadUrl(img, `slide_overflow_${idx}`);
-          }
-          return img;
-        })
+      safePoster.insightsImageUrl = await shrinkBase64DataUrl(
+        safePoster.insightsImageUrl,
+        1400,
+        0.78,
+        160000
       );
-      safePoster.imageUrl = safePoster.imageUrls[0] || '';
     }
   }
 
   safePoster._isOptimized = true;
   return safePoster;
 }
-

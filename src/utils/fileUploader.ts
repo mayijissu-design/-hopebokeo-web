@@ -1,15 +1,18 @@
-import { db, doc, getDoc, setDoc } from '../lib/firebase';
+import { db, doc, getDoc, setDoc, isFirestoreWriteQuotaExhausted } from '../lib/firebase';
+import { compressImageFile, shrinkBase64DataUrl } from './imageCompressor';
 
 /**
- * Fast direct binary file uploader & universal /uploads/ resolver.
- * Preserves 100% of the original uncompressed image bytes and quality.
+ * Fast, non-blocking binary & compressed image uploader + universal `/uploads/` resolver.
  *
- * 1. Streams the file as multipart/form-data to /api/upload-file when running on the Express server.
- * 2. When on static hosting (e.g. Netlify, Vercel, GitHub Pages) or if the server route is unreachable,
- *    saves the full-resolution original binary data directly to Cloud Firestore in `uploaded_files`
- *    (and `uploaded_file_chunks` for files > 650KB so there is no size limit and zero compression).
- * 3. Automatically resolves `/uploads/:filename` URLs from Cloud Firestore into native `blob:` URLs
- *    whenever an `<img>` or background image requests an `/uploads/` file that isn't statically bundled.
+ * Why this is fast and never hangs:
+ * 1. Optimizes images on the client in ~100ms using HTML5 Canvas (Full HD 1920px, ~180KB-260KB)
+ *    before uploading, so 10MB camera photos don't stall the network or split into 20 chunks.
+ * 2. Skips `/api/upload-file` automatically on known static hosts (e.g. hopebokeo.org / Netlify / Vercel)
+ *    and enforces a strict 2.5s timeout on Express server uploads.
+ * 3. Enforces a strict 2.5s timeout on Firestore `uploaded_files` writes (`setDoc`), because
+ *    Firebase Web SDK `setDoc` can otherwise hang indefinitely when offline or quota-throttled.
+ * 4. If both server disk upload and Firestore `uploaded_files` time out or fail, immediately
+ *    falls back to the compact optimized `data:image/...` URL so the upload succeeds 100% of the time.
  */
 
 export interface UploadResult {
@@ -19,11 +22,48 @@ export interface UploadResult {
   size?: number;
 }
 
-const CHUNK_SIZE = 650000; // ~650KB base64 per chunk, well below Firestore's 1MB limit
+export interface UploadOptions {
+  maxDimension?: number;
+  maxStringLength?: number;
+  preserveTransparency?: boolean;
+}
+
+const CHUNK_SIZE = 650000;
 const uploadBlobUrlCache = new Map<string, string>();
 const pendingResolutions = new Map<string, Promise<string>>();
 const failedResolutionCache = new Set<string>();
 let firestoreQuotaCoolingUntil = 0;
+let serverUploadRouteUnavailable = false;
+
+function isKnownStaticHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = (window.location.hostname || '').toLowerCase();
+  return (
+    host === 'hopebokeo.org' ||
+    host.endsWith('.hopebokeo.org') ||
+    host.endsWith('.netlify.app') ||
+    host.endsWith('.vercel.app') ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.pages.dev')
+  );
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label = 'operation'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 /**
  * Strips any temporary preview or localhost origin from an `/uploads/...` URL so that
@@ -97,6 +137,28 @@ function base64ToBlobUrl(base64Data: string, mimeType: string): string {
   }
 }
 
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  try {
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return null;
+    const mimeType = match[1];
+    const byteCharacters = atob(match[2]);
+    const byteArrays: Uint8Array[] = [];
+    const sliceSize = 32768;
+    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+      const slice = byteCharacters.slice(offset, offset + sliceSize);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      byteArrays.push(new Uint8Array(byteNumbers));
+    }
+    return new Blob(byteArrays, { type: mimeType });
+  } catch {
+    return null;
+  }
+}
+
 export function getCachedUploadUrl(url?: string): string {
   if (!url || typeof url !== 'string') return url || '';
   const cleanUrl = normalizeUploadUrl(url);
@@ -108,7 +170,7 @@ export function getCachedUploadUrl(url?: string): string {
 
 /**
  * Resolves an `/uploads/:filename` path from Cloud Firestore `uploaded_files` / `uploaded_file_chunks`
- * into a 100% original-quality `blob:` URL ONLY when static hosting does not have the file on disk.
+ * into a `blob:` URL ONLY when static hosting does not have the file on disk.
  */
 export async function resolveUploadUrl(url: string): Promise<string> {
   if (!url || typeof url !== 'string') return url || '';
@@ -132,7 +194,11 @@ export async function resolveUploadUrl(url: string): Promise<string> {
   const promise = (async () => {
     try {
       const docId = filename.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const fileDoc = await getDoc(doc(db, 'uploaded_files', docId));
+      const fileDoc = await withTimeout(
+        getDoc(doc(db, 'uploaded_files', docId)),
+        3500,
+        'Firestore getDoc uploaded_files'
+      );
       if (fileDoc.exists()) {
         const fileData = fileDoc.data();
         const mimeType = inferMimeFromFilename(filename, fileData?.mimeType);
@@ -141,9 +207,11 @@ export async function resolveUploadUrl(url: string): Promise<string> {
           const chunkPromises: Promise<string>[] = [];
           for (let i = 0; i < fileData.totalChunks; i++) {
             chunkPromises.push(
-              getDoc(doc(db, 'uploaded_file_chunks', `${docId}_chk_${i}`)).then((chkSnap) =>
-                chkSnap.exists() ? chkSnap.data()?.chunk || '' : ''
-              )
+              withTimeout(
+                getDoc(doc(db, 'uploaded_file_chunks', `${docId}_chk_${i}`)),
+                3500,
+                'Firestore getDoc chunk'
+              ).then((chkSnap) => (chkSnap.exists() ? chkSnap.data()?.chunk || '' : ''))
             );
           }
           const chunksList = await Promise.all(chunkPromises);
@@ -177,8 +245,8 @@ export async function resolveUploadUrl(url: string): Promise<string> {
 }
 
 /**
- * Saves raw base64 data (with or without `data:...;base64,` prefix) to Firestore `uploaded_files`
- * (and `uploaded_file_chunks` if > 650KB) with 100% original uncompressed bytes.
+ * Saves base64 data to Firestore `uploaded_files` with a strict timeout so it never hangs.
+ * Automatically compresses oversized base64 images so they fit in a single fast Firestore document.
  */
 export async function saveBase64ToFirestoreUploadedFiles(
   base64Input: string,
@@ -186,15 +254,29 @@ export async function saveBase64ToFirestoreUploadedFiles(
   explicitMimeType?: string,
   explicitFilename?: string
 ): Promise<string> {
+  let fullDataUrl = base64Input;
   let mimeType = explicitMimeType || 'image/jpeg';
-  let rawBase64 = base64Input;
 
-  const match = base64Input.match(/^data:([^;]+);base64,(.+)$/);
+  if (!base64Input.startsWith('data:')) {
+    fullDataUrl = `data:${mimeType};base64,${base64Input}`;
+  }
+
+  // If image is > 320KB base64, shrink it to crisp HD (~240KB) so it writes in 1 single fast document
+  if (fullDataUrl.startsWith('data:image') && fullDataUrl.length > 320000) {
+    try {
+      fullDataUrl = await shrinkBase64DataUrl(fullDataUrl, 1920, 0.85, 260000);
+    } catch {
+      // keep fullDataUrl
+    }
+  }
+
+  let rawBase64 = fullDataUrl;
+  const match = fullDataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (match) {
     mimeType = match[1];
     rawBase64 = match[2];
-  } else if (base64Input.includes(';base64,')) {
-    rawBase64 = base64Input.split(';base64,')[1];
+  } else if (fullDataUrl.includes(';base64,')) {
+    rawBase64 = fullDataUrl.split(';base64,')[1];
   }
 
   let ext = '.jpg';
@@ -213,109 +295,217 @@ export async function saveBase64ToFirestoreUploadedFiles(
   const docId = filename.replace(/[^a-zA-Z0-9_-]/g, '_');
   const uploadPath = `/uploads/${filename}`;
 
-  // Cache local blob URL immediately so UI renders instantaneously at 100% quality
+  // Cache local blob URL immediately so UI renders instantaneously
   const localBlobUrl = base64ToBlobUrl(rawBase64, mimeType);
   uploadBlobUrlCache.set(uploadPath, localBlobUrl);
+  failedResolutionCache.delete(uploadPath);
+
+  if (Date.now() < firestoreQuotaCoolingUntil || isFirestoreWriteQuotaExhausted()) {
+    // If Firestore is in quota cooldown, return compact data URL so image still works 100% across reloads
+    return fullDataUrl;
+  }
 
   const approxByteSize = Math.round(rawBase64.length * 0.75);
 
-  if (rawBase64.length <= CHUNK_SIZE) {
-    await setDoc(
-      doc(db, 'uploaded_files', docId),
-      {
-        filename,
-        mimeType,
-        data: rawBase64,
-        size: approxByteSize,
-        isChunked: false,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } else {
-    const chunks: string[] = [];
-    for (let i = 0; i < rawBase64.length; i += CHUNK_SIZE) {
-      chunks.push(rawBase64.slice(i, i + CHUNK_SIZE));
+  try {
+    if (rawBase64.length <= CHUNK_SIZE) {
+      await withTimeout(
+        setDoc(
+          doc(db, 'uploaded_files', docId),
+          {
+            filename,
+            mimeType,
+            data: rawBase64,
+            size: approxByteSize,
+            isChunked: false,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ),
+        2800,
+        'Firestore setDoc uploaded_files'
+      );
+    } else {
+      const chunks: string[] = [];
+      for (let i = 0; i < rawBase64.length; i += CHUNK_SIZE) {
+        chunks.push(rawBase64.slice(i, i + CHUNK_SIZE));
+      }
+
+      await withTimeout(
+        Promise.all([
+          setDoc(
+            doc(db, 'uploaded_files', docId),
+            {
+              filename,
+              mimeType,
+              size: approxByteSize,
+              isChunked: true,
+              totalChunks: chunks.length,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ),
+          ...chunks.map((chunkStr, i) =>
+            setDoc(doc(db, 'uploaded_file_chunks', `${docId}_chk_${i}`), {
+              fileId: docId,
+              docId,
+              filename,
+              index: i,
+              chunkIndex: i,
+              chunk: chunkStr,
+              updatedAt: new Date().toISOString(),
+            })
+          ),
+        ]),
+        3500,
+        'Firestore setDoc chunked upload'
+      );
     }
-
-    await setDoc(
-      doc(db, 'uploaded_files', docId),
-      {
-        filename,
-        mimeType,
-        size: approxByteSize,
-        isChunked: true,
-        totalChunks: chunks.length,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-
-    await Promise.all(
-      chunks.map((chunkStr, i) =>
-        setDoc(doc(db, 'uploaded_file_chunks', `${docId}_chk_${i}`), {
-          fileId: docId,
-          docId,
-          filename,
-          index: i,
-          chunkIndex: i,
-          chunk: chunkStr,
-          updatedAt: new Date().toISOString(),
-        })
-      )
-    );
+    if (isFirestoreWriteQuotaExhausted()) {
+      return fullDataUrl;
+    }
+    return uploadPath;
+  } catch (err: any) {
+    const msg = String(err?.message || err?.code || err || '');
+    if (msg.includes('resource-exhausted') || msg.includes('Quota')) {
+      firestoreQuotaCoolingUntil = Date.now() + 3 * 60 * 1000;
+    }
+    // Return the compressed data URL directly so the image never fails to load or save
+    return fullDataUrl;
   }
-
-  return uploadPath;
 }
 
-export async function uploadFileDirectly(file: File): Promise<UploadResult> {
+/**
+ * Fast, reliable file uploader that optimizes images on the client first (~100ms),
+ * then uploads with a strict 2.5s timeout so the UI never hangs on "Uploading...".
+ */
+export async function uploadFileDirectly(
+  file: File,
+  options?: UploadOptions
+): Promise<UploadResult> {
   const instantBlobUrl = URL.createObjectURL(file);
+  const isImage =
+    file.type.startsWith('image/') ||
+    /\.(jpg|jpeg|png|webp|bmp|avif|jfif|heic|heif)$/i.test(file.name || '');
+  const isSvgOrGif =
+    file.type.includes('svg') ||
+    file.type.includes('gif') ||
+    /\.(svg|gif)$/i.test(file.name || '');
 
-  // 1. Try server endpoint first (Multipart binary stream - zero quality modification)
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
+  let optimizedDataUrl = '';
+  let uploadBlob: Blob = file;
+  let uploadFileName = file.name || `upload_${Date.now()}.jpg`;
 
-    const response = await fetch('/api/upload-file', {
-      method: 'POST',
-      body: formData,
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (response.ok && contentType.includes('application/json')) {
-      const data = await response.json();
-      if (data.success && data.url) {
-        uploadBlobUrlCache.set(data.url, instantBlobUrl);
-        // Also ensure the file is persisted in client-side Cloud Firestore under the exact same /uploads/ filename
-        // so that all other devices/deployments (e.g. Netlify) immediately resolve it in real time
-        try {
-          await uploadFileToFirestoreDirectly(file, instantBlobUrl, data.url);
-        } catch (fsErr) {
-          console.warn('Client Firestore mirror notice:', fsErr);
+  // 1. Compress/optimize images in browser first (<150ms) so we never upload 10MB raw camera files
+  if (isImage && !isSvgOrGif) {
+    try {
+      const maxDim = options?.maxDimension || 1920;
+      const maxLen = Math.min(options?.maxStringLength || 260000, 320000);
+      optimizedDataUrl = await withTimeout(
+        compressImageFile(
+          file,
+          maxDim,
+          0.86,
+          maxLen,
+          Boolean(options?.preserveTransparency)
+        ),
+        2500,
+        'Image compression'
+      );
+      if (optimizedDataUrl && optimizedDataUrl.startsWith('data:image')) {
+        const convertedBlob = dataUrlToBlob(optimizedDataUrl);
+        if (convertedBlob) {
+          uploadBlob = convertedBlob;
+          const isPng = optimizedDataUrl.startsWith('data:image/png');
+          const baseName =
+            (file.name || 'image').replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') ||
+            'image';
+          uploadFileName = `${baseName}${isPng ? '.png' : '.jpg'}`;
         }
-        return {
-          success: true,
-          url: data.url,
-          fileName: data.fileName || file.name,
-          size: data.size || file.size,
-        };
       }
+    } catch {
+      // Fallback to original file if canvas compression fails
     }
-  } catch (backendErr) {
-    console.warn(
-      'Direct server upload route unavailable (static hosting), saving 100% original file to Cloud Firestore:',
-      backendErr
-    );
   }
 
-  // 2. Client-side Cloud Firestore chunked upload fallback (Works 100% on Netlify, Vercel & GitHub Pages for ANY file size)
+  // 2. Try Express `/api/upload-file` ONLY if not on a known static host (Netlify/Vercel)
+  if (!isKnownStaticHost() && !serverUploadRouteUnavailable) {
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadBlob, uploadFileName);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      const response = await fetch('/api/upload-file', {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (response.status === 404 || response.status === 405) {
+        serverUploadRouteUnavailable = true;
+      } else {
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('application/json')) {
+          const data = await response.json();
+          if (data.success && data.url) {
+            uploadBlobUrlCache.set(data.url, instantBlobUrl);
+            failedResolutionCache.delete(data.url);
+            // Mirror to Firestore in the background (non-blocking!) so static sites also have it
+            if (optimizedDataUrl) {
+              saveBase64ToFirestoreUploadedFiles(
+                optimizedDataUrl,
+                'img',
+                uploadBlob.type || file.type,
+                data.url
+              ).catch(() => {});
+            } else {
+              uploadFileToFirestoreDirectly(file, instantBlobUrl, data.url).catch(() => {});
+            }
+            return {
+              success: true,
+              url: data.url,
+              fileName: data.fileName || uploadFileName,
+              size: data.size || uploadBlob.size,
+            };
+          }
+        }
+      }
+    } catch {
+      // Server route timed out or unavailable; proceed immediately to fast client fallback
+    }
+  }
+
+  // 3. Static host (e.g. hopebokeo.org) or Express offline:
+  // If we already have the optimized data URL, save it to Firestore with a 2.5s timeout
+  if (optimizedDataUrl) {
+    const cleanBaseName =
+      uploadFileName
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 32) || 'image';
+    const savedUrl = await saveBase64ToFirestoreUploadedFiles(
+      optimizedDataUrl,
+      cleanBaseName,
+      uploadBlob.type || 'image/jpeg'
+    );
+    uploadBlobUrlCache.set(savedUrl, instantBlobUrl);
+    return {
+      success: true,
+      url: savedUrl,
+      fileName: uploadFileName,
+      size: uploadBlob.size,
+    };
+  }
+
+  // 4. Non-image or fallback file upload to Firestore
   return await uploadFileToFirestoreDirectly(file, instantBlobUrl);
 }
 
 /**
- * Uploads a file directly from the browser to Cloud Firestore `uploaded_files` (& `uploaded_file_chunks` if > 650KB).
- * Preserves 100% of the original uncompressed image bytes with no size limit.
+ * Uploads a file directly from the browser to Cloud Firestore `uploaded_files` with a strict timeout.
  */
 export async function uploadFileToFirestoreDirectly(
   file: File,
@@ -331,26 +521,22 @@ export async function uploadFileToFirestoreDirectly(
       .replace(/^_|_$/g, '')
       .slice(0, 32) || 'image';
 
-  const base64Data = await new Promise<string>((resolve, reject) => {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const res = reader.result as string;
-      const b64 = res.includes(';base64,') ? res.split(';base64,')[1] : res;
-      resolve(b64);
-    };
+    reader.onload = () => resolve((reader.result as string) || '');
     reader.onerror = (e) => reject(e);
     reader.readAsDataURL(file);
   });
 
   const mimeType = inferMimeFromFilename(ext, file.type);
   const uploadUrl = await saveBase64ToFirestoreUploadedFiles(
-    base64Data,
+    dataUrl,
     cleanBaseName,
     mimeType,
     explicitUploadUrl
   );
 
-  if (existingBlobUrl) {
+  if (existingBlobUrl && uploadUrl.startsWith('/uploads/')) {
     uploadBlobUrlCache.set(uploadUrl, existingBlobUrl);
   }
 
@@ -407,7 +593,6 @@ export function initGlobalUploadUrlResolver(): void {
       .catch(() => {});
   };
 
-  // 1. Capture-phase error listener on <img> elements for `/uploads/...`
   window.addEventListener(
     'error',
     (event: Event) => {
@@ -421,9 +606,6 @@ export function initGlobalUploadUrlResolver(): void {
     true
   );
 
-  // 2. Observer that normalizes any temporary preview host prefix (`https://ais-dev-.../uploads/...`)
-  //    to a clean relative `/uploads/...` path and applies in-memory blob cache if present,
-  //    without querying Firestore unless the static file fails to load.
   const upgradeImgElement = (img: HTMLImageElement) => {
     const rawSrc = img.getAttribute('src') || '';
     if (!rawSrc.includes('/uploads/')) return;

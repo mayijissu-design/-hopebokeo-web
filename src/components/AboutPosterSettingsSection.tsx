@@ -20,6 +20,7 @@ import { UnifiedMediaUploader } from './UnifiedMediaUploader';
 import { RichTextEditor } from './RichTextEditor';
 import { Language, MinistryTimelineItem } from '../types';
 import { MinistryTimelineManager } from './MinistryTimelineManager';
+import { getCachedUploadUrl } from '../utils/fileUploader';
 
 interface AboutPosterSettingsSectionProps {
   language: Language;
@@ -370,15 +371,17 @@ export const AboutPosterSettingsSection: React.FC<AboutPosterSettingsSectionProp
     else setPosterBokeoDesc(val);
   };
 
-  const effectiveHeroPoster =
+  const rawHeroPoster =
     aboutHeroImageUrl && aboutHeroImageUrl.trim() !== ''
       ? aboutHeroImageUrl
       : DEFAULT_ABOUT_HERO_IMAGE;
+  const effectiveHeroPoster = getCachedUploadUrl(rawHeroPoster);
 
-  const effectiveWhoWeAreImage =
+  const rawWhoWeAreImage =
     posterBokeoImageUrl && posterBokeoImageUrl.trim() !== ''
       ? posterBokeoImageUrl
       : DEFAULT_WHO_WE_ARE_IMAGE;
+  const effectiveWhoWeAreImage = getCachedUploadUrl(rawWhoWeAreImage);
 
   const heroPosX = parseInt((bokeoPosterPosition.split(' ')[0] || '50%').replace('%', ''), 10) || 50;
   const heroPosY = parseInt((bokeoPosterPosition.split(' ')[1] || '50%').replace('%', ''), 10) || 50;

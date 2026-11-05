@@ -1636,7 +1636,14 @@ export const AdminTab: React.FC<AdminTabProps> = ({
       return;
     }
     if (!isSettingsUnlockedRef.current || isHydratingFromPropsRef.current) return;
-    if (adminSubTabRef.current !== 'poster' && adminSubTabRef.current !== 'upcoming') return;
+    if (
+      adminSubTabRef.current !== 'poster' &&
+      adminSubTabRef.current !== 'upcoming' &&
+      adminSubTabRef.current !== 'about_poster' &&
+      adminSubTabRef.current !== 'insights_poster'
+    ) {
+      return;
+    }
 
     const timer = setTimeout(() => {
       if (isHydratingFromPropsRef.current) return;
@@ -1658,6 +1665,53 @@ export const AdminTab: React.FC<AdminTabProps> = ({
         description: posterDesc,
         descriptionEn: posterDescEn,
         descriptionTh: posterDescTh,
+        aboutHeroImageUrl: (aboutHeroImageUrl || '').trim(),
+        hideAboutHeroPoster: hideAboutHeroPoster,
+        aboutHeroBadge: aboutHeroBadge,
+        aboutHeroBadgeEn: aboutHeroBadgeEn,
+        aboutHeroBadgeTh: aboutHeroBadgeTh,
+        aboutHeroVerse: aboutHeroVerse,
+        aboutHeroVerseEn: aboutHeroVerseEn,
+        aboutHeroVerseTh: aboutHeroVerseTh,
+        aboutHeroVerseRef: aboutHeroVerseRef,
+        aboutHeroVerseRefEn: aboutHeroVerseRefEn,
+        aboutHeroVerseRefTh: aboutHeroVerseRefTh,
+        aboutWhoWeArePosition: aboutWhoWeArePosition,
+        aboutWhoWeAreScale: Number(aboutWhoWeAreScale) || 100,
+        aboutWhoWeAreFit: aboutWhoWeAreFit,
+        aboutWhoWeAreBadge: aboutWhoWeAreBadge,
+        aboutWhoWeAreBadgeEn: aboutWhoWeAreBadgeEn,
+        aboutWhoWeAreBadgeTh: aboutWhoWeAreBadgeTh,
+        aboutWhoWeAreTitle: aboutWhoWeAreTitle,
+        aboutWhoWeAreTitleEn: aboutWhoWeAreTitleEn,
+        aboutWhoWeAreTitleTh: aboutWhoWeAreTitleTh,
+        bokeoTitle: posterBokeoTitle,
+        bokeoTitleEn: posterBokeoTitleEn,
+        bokeoTitleTh: posterBokeoTitleTh,
+        bokeoDesc: posterBokeoDesc,
+        bokeoDescEn: posterBokeoDescEn,
+        bokeoDescTh: posterBokeoDescTh,
+        bokeoImageUrl: (posterBokeoImageUrl || '').trim(),
+        bokeoPosterHeight: Number(bokeoPosterHeight),
+        bokeoPosterOverlayOpacity: Number(bokeoPosterOverlayOpacity),
+        bokeoPosterEdgeFade: Number(bokeoPosterEdgeFade),
+        bokeoPosterDim: Number(bokeoPosterDim),
+        bokeoPosterScale: Number(posterBokeoScale) || 100,
+        bokeoPosterPosition: posterBokeoPosition,
+        bokeoPosterFit: posterBokeoFit,
+        hideBokeoSection: hideBokeoSection,
+        bokeoTimeline: bokeoTimeline || [],
+        bokeoTimelineTitle: (bokeoTimelineTitle || '').trim(),
+        bokeoTimelineTitleEn: (bokeoTimelineTitleEn || '').trim(),
+        bokeoTimelineTitleTh: (bokeoTimelineTitleTh || '').trim(),
+        hideBokeoTimeline: hideBokeoTimeline,
+        vision: donationVision || '',
+        visionEn: donationVisionEn || '',
+        visionTh: donationVisionTh || '',
+        mission: donationMission || '',
+        missionEn: donationMissionEn || '',
+        missionTh: donationMissionTh || '',
+        hideVisionMission: hideVisionMissionState,
         imageUrl: finalCoverList[0] || '',
         imageUrls: finalCoverList,
         videoUrl: posterVideoUrl,
@@ -1738,7 +1792,7 @@ export const AdminTab: React.FC<AdminTabProps> = ({
       if (onSaveHomePoster) {
         onSaveHomePoster(draft).catch(() => {});
       }
-    }, 600);
+    }, 2500);
 
     return () => clearTimeout(timer);
   }, [
@@ -1751,6 +1805,53 @@ export const AdminTab: React.FC<AdminTabProps> = ({
     posterDesc,
     posterDescEn,
     posterDescTh,
+    aboutHeroImageUrl,
+    hideAboutHeroPoster,
+    aboutHeroBadge,
+    aboutHeroBadgeEn,
+    aboutHeroBadgeTh,
+    aboutHeroVerse,
+    aboutHeroVerseEn,
+    aboutHeroVerseTh,
+    aboutHeroVerseRef,
+    aboutHeroVerseRefEn,
+    aboutHeroVerseRefTh,
+    aboutWhoWeArePosition,
+    aboutWhoWeAreScale,
+    aboutWhoWeAreFit,
+    aboutWhoWeAreBadge,
+    aboutWhoWeAreBadgeEn,
+    aboutWhoWeAreBadgeTh,
+    aboutWhoWeAreTitle,
+    aboutWhoWeAreTitleEn,
+    aboutWhoWeAreTitleTh,
+    posterBokeoTitle,
+    posterBokeoTitleEn,
+    posterBokeoTitleTh,
+    posterBokeoDesc,
+    posterBokeoDescEn,
+    posterBokeoDescTh,
+    posterBokeoImageUrl,
+    bokeoPosterHeight,
+    bokeoPosterOverlayOpacity,
+    bokeoPosterEdgeFade,
+    bokeoPosterDim,
+    posterBokeoScale,
+    posterBokeoPosition,
+    posterBokeoFit,
+    hideBokeoSection,
+    bokeoTimeline,
+    bokeoTimelineTitle,
+    bokeoTimelineTitleEn,
+    bokeoTimelineTitleTh,
+    hideBokeoTimeline,
+    donationVision,
+    donationVisionEn,
+    donationVisionTh,
+    donationMission,
+    donationMissionEn,
+    donationMissionTh,
+    hideVisionMissionState,
     posterImgUrl,
     posterImageUrls,
     posterVideoUrl,

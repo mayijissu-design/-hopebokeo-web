@@ -434,38 +434,72 @@ export async function deleteTeamFromFirestore(rowId: number, id?: string) {
   }
 }
 
+function withFirestoreWriteTimeout<T>(promise: Promise<T>, ms = 3500): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Firestore write timed out after ${ms}ms`));
+    }, ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export async function saveHomePosterToFirestore(poster: any) {
   let safePoster = { ...poster, updatedAt: poster?.updatedAt || new Date().toISOString() };
   if (!safePoster?._isOptimized) {
     safePoster = await optimizePosterForFirestore(safePoster);
   }
   const jsonSize = JSON.stringify(safePoster).length;
-  
+
   if (jsonSize > 850000) {
     console.warn(`saveHomePosterToFirestore: Document size ${jsonSize} is high. Running emergency compression...`);
     safePoster = await emergencyCompressObject(safePoster);
   }
 
   try {
-    await setDoc(doc(db, CONFIG_COL, 'homePoster'), sanitizeForFirestore(safePoster), { merge: true });
+    await withFirestoreWriteTimeout(
+      setDoc(doc(db, CONFIG_COL, 'homePoster'), sanitizeForFirestore(safePoster), { merge: true }),
+      3500
+    );
   } catch (err: any) {
     console.warn('Firestore setDoc initial attempt warning:', err);
-    if (err?.message?.includes('exceeds the maximum allowed size') || err?.message?.includes('too large') || jsonSize > 850000) {
+    if (
+      err?.message?.includes('exceeds the maximum allowed size') ||
+      err?.message?.includes('too large') ||
+      jsonSize > 850000
+    ) {
       console.warn('Retrying saveHomePoster with deep compression...');
       safePoster = await emergencyCompressObject(safePoster);
-      await setDoc(doc(db, CONFIG_COL, 'homePoster'), sanitizeForFirestore(safePoster), { merge: true });
+      await withFirestoreWriteTimeout(
+        setDoc(doc(db, CONFIG_COL, 'homePoster'), sanitizeForFirestore(safePoster), { merge: true }),
+        3500
+      ).catch(() => {});
       return;
     }
-    throw err;
+    markFirestoreQuotaExceeded(err);
   }
 }
 
 export async function saveDonationInfoToFirestore(info: any) {
-  await setDoc(
-    doc(db, CONFIG_COL, 'donationInfo'),
-    sanitizeForFirestore({ ...info, updatedAt: info?.updatedAt || new Date().toISOString() }),
-    { merge: true }
-  );
+  try {
+    await withFirestoreWriteTimeout(
+      setDoc(
+        doc(db, CONFIG_COL, 'donationInfo'),
+        sanitizeForFirestore({ ...info, updatedAt: info?.updatedAt || new Date().toISOString() }),
+        { merge: true }
+      ),
+      3500
+    );
+  } catch (err: any) {
+    markFirestoreQuotaExceeded(err);
+  }
 }
 
 export async function saveGlobalSettingsToFirestore(settings: {

@@ -6,6 +6,7 @@ import {
   getCachedUploadUrl,
   resolveUploadUrl,
 } from "../utils/fileUploader";
+import { compressImageFile } from "../utils/imageCompressor";
 
 export interface UnifiedMediaUploaderProps {
   value?: string;
@@ -30,6 +31,9 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
   placeholder,
   fileType = "image",
   acceptTypes,
+  preserveTransparency = false,
+  maxDimension = 1920,
+  maxStringLength = 260000,
   disabled = false,
   className = "",
 }) => {
@@ -69,29 +73,69 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Show instant local preview while processing
+    let localObjectUrl = "";
+    try {
+      localObjectUrl = URL.createObjectURL(file);
+      setPreviewSrc(localObjectUrl);
+      setPreviewHidden(false);
+    } catch {}
+
     try {
       setIsUploading(true);
       setUploadError(null);
-      setPreviewHidden(false);
 
-      const result = await uploadFileDirectly(file);
-      if (result.success && result.url) {
+      const uploadPromise = uploadFileDirectly(file, {
+        maxDimension,
+        maxStringLength,
+        preserveTransparency,
+      });
+
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 3500)
+      );
+
+      const result = await Promise.race([uploadPromise, timeoutPromise]);
+      if (result && result.success && result.url) {
         onChange(result.url);
       } else {
-        throw new Error("Upload failed");
+        // Fast client-side compressed fallback if upload timed out
+        const compressed = await compressImageFile(
+          file,
+          maxDimension || 1920,
+          0.86,
+          maxStringLength || 260000,
+          preserveTransparency
+        );
+        if (compressed) {
+          onChange(compressed);
+        } else {
+          throw new Error("Upload timed out");
+        }
       }
     } catch (err: any) {
       console.error("File upload error:", err);
       try {
-        const reader = new FileReader();
-        reader.onload = (loadEvt) => {
-          const res = loadEvt.target?.result as string;
-          if (res) {
-            onChange(res);
-          }
-        };
-        reader.readAsDataURL(file);
-      } catch (fallbackErr) {
+        const compressed = await compressImageFile(
+          file,
+          maxDimension || 1600,
+          0.82,
+          maxStringLength || 220000,
+          preserveTransparency
+        );
+        if (compressed) {
+          onChange(compressed);
+        } else {
+          const reader = new FileReader();
+          reader.onload = (loadEvt) => {
+            const res = loadEvt.target?.result as string;
+            if (res) {
+              onChange(res);
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+      } catch {
         setUploadError(
           language === "lo" ? "ການອັບໂຫຼດຂັດຂ້ອງ" : "Upload error"
         );
@@ -106,19 +150,25 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
 
   const handleClear = () => {
     onChange("");
+    setPreviewSrc("");
     setUploadError(null);
     setPreviewHidden(false);
   };
 
   const isImageValue =
-    value &&
+    Boolean(value || previewSrc) &&
+    fileType !== "video" &&
+    fileType !== "doc" &&
     (value.startsWith("data:image") ||
       value.startsWith("blob:") ||
+      previewSrc.startsWith("blob:") ||
+      previewSrc.startsWith("data:image") ||
       /\.(jpeg|jpg|png|webp|svg|gif|bmp|avif|jfif)($|\?)/i.test(value) ||
       value.startsWith("/uploads/") ||
       value.includes("images.unsplash.com") ||
       value.includes("firebasestorage") ||
-      value.includes("googleusercontent"));
+      value.includes("googleusercontent") ||
+      fileType === "image");
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -135,7 +185,14 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
           </div>
           <input
             type="text"
-            value={value}
+            value={
+              value && value.startsWith("data:image")
+                ? language === "lo"
+                  ? "✓ ອັບໂຫຼດຮູບພາບສຳເລັດແລ້ວ (Image Ready)"
+                  : "✓ Uploaded Image Ready"
+                : value
+            }
+            readOnly={Boolean(value && value.startsWith("data:image"))}
             disabled={disabled}
             onChange={(e) => onChange(e.target.value)}
             placeholder={defaultPlaceholder}
@@ -158,13 +215,13 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
             ref={fileInputRef}
             type="file"
             accept={defaultAccept}
-            disabled={isUploading}
+            disabled={isUploading || disabled}
             onChange={handleFileChange}
             className="hidden"
           />
           <button
             type="button"
-            disabled={isUploading}
+            disabled={isUploading || disabled}
             onClick={() => fileInputRef.current?.click()}
             className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-1.5 transition active:scale-95 disabled:opacity-50 cursor-pointer"
           >
@@ -189,7 +246,7 @@ export const UnifiedMediaUploader: React.FC<UnifiedMediaUploaderProps> = ({
         <p className="text-xs text-red-500 font-medium">{uploadError}</p>
       )}
 
-      {isImageValue && !previewHidden && (
+      {isImageValue && !previewHidden && (previewSrc || value) && (
         <div className="relative inline-block mt-2 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 max-w-[200px] shadow-xs">
           <img
             src={previewSrc || value}
