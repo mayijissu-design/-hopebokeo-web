@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="lo">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hope Bokeo</title>
+
+    <meta name="theme-color" content="#cc0000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="HOPE BOKEO" />
+
+    <link rel="icon" type="image/svg+xml" href="/hb-logo.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Google Font for Calligraphy Accent -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+
+    <!-- Meta Description -->
+    <meta name="description" content="Hope Bokeo community portal with Google Sheets data integration" />
+
+    <!-- Meta Keywords (5 Languages: Lao, English, Thai, Chinese, Vietnamese) -->
+    <meta name="keywords" content="ພັນທະກິດໂຮບບໍ່ແກ້ວ, ໂຮບບໍ່ແກ້ວ, ຄຣິດຕະຈັກບໍ່ແກ້ວ, ຄຣິດສະຕຽນລາວ, ຂ່າວປະເສີດບໍ່ແກ້ວ, ບໍລິຈາກພັນທະກິດບໍ່ແກ້ວ, ແຜນທີ່ຄຣິດຕະຈັກບໍ່ແກ້ວ, Hope Bokeo, Hope Bokeo Ministry, Bokeo Church Laos, Laos Christian Ministry, Gospel Outreach Bokeo, Bokeo Church Data, Laos Church Planting, พันธกิจโฮปบ่อแก้ว, คริสตจักรบ่อแก้ว, คริสเตียนลาว, เผยแพร่ข่าวประเสริฐบ่อแก้ว, 波乔希望事工, 老挝波乔教会, 老挝基督教事工, Mục sự Hope Bokeo, Hội thánh Bokeo Lào, Tin Lành Bokeo Lào" />
+
+    <!-- Author & Robots -->
+    <meta name="author" content="Hope Bokeo Ministry Team" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph / Facebook / Social Share -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Hope Bokeo" />
+    <meta property="og:description" content="Hope Bokeo community portal with Google Sheets data integration" />
+    <meta property="og:site_name" content="Hope Bokeo Ministry" />
+    <meta property="og:locale" content="lo_LA" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:locale:alternate" content="th_TH" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Hope Bokeo Ministry - ພັນທະກິດໂຮບບໍ່ແກ້ວ" />
+    <meta name="twitter:description" content="Platform for Christian community statistics, church updates, and ministry outreach in Bokeo, Laos." />
+
+    <!-- Dark mode persistence & harmless notification filter script -->
+    <script>
+      (function() {
+        // Prevent harmless ResizeObserver notification loops from throwing unhandled errors
+        window.addEventListener('error', function(e) {
+          if (e && e.message && (
+            e.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
+            e.message.indexOf('ResizeObserver loop limit exceeded') !== -1
+          )) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return false;
+          }
+        });
+
+        try {
+          var saved = localStorage.getItem('hb_dark_mode');
+          if (saved === 'true' || (saved === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+            if (document.body) document.body.classList.add('dark');
+          }
+        } catch (e) {}
+
+        // Remove any bloated cache item (>1MB) to prevent synchronous main-thread allocation spikes
+        try {
+          ['hb_cached_villages', 'hb_cached_events', 'hb_cached_teams', 'hb_cached_home_poster'].forEach(function(k) {
+            var raw = localStorage.getItem(k);
+            if (raw && raw.length > 1048576) {
+              localStorage.removeItem(k);
+            }
+          });
+        } catch (e) {}
+      })();
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Lao+Looped:wght@400;500;600;700;800&family=Noto+Sans+Lao:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@300;400;500;600;700;800&family=Prompt:wght@400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- PDF.js Engine & Official Text Layer for selectable & copyable text -->
+    <link rel="stylesheet" href="/pdf_viewer.css">
+    <script src="/pdf.min.js"></script>
+    <script>
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

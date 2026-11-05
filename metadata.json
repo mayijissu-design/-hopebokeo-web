@@ -1,0 +1,8 @@
+{
+  "name": "Hope Bokeo",
+  "description": "Hope Bokeo community portal with Google Sheets data integration",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

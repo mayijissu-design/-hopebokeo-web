@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="100%" height="100%">
+  <defs>
+    <!-- Soft 3D Floor Shadow -->
+    <filter id="hbDropShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="6" flood-color="#000000" flood-opacity="0.32" />
+    </filter>
+
+    <!-- Ultra-Glossy 3D Candy Red Gradient -->
+    <linearGradient id="candyRedGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff3b44" />
+      <stop offset="12%" stop-color="#fa111d" />
+      <stop offset="45%" stop-color="#e0000c" />
+      <stop offset="80%" stop-color="#b80008" />
+      <stop offset="100%" stop-color="#7a0004" />
+    </linearGradient>
+
+    <!-- Top Specular Bevel Highlight Gradient -->
+    <linearGradient id="topHighlightGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.85" />
+      <stop offset="20%" stop-color="#ff999f" stop-opacity="0.5" />
+      <stop offset="60%" stop-color="#ff222f" stop-opacity="0.1" />
+      <stop offset="100%" stop-color="#4d0003" stop-opacity="0.6" />
+    </linearGradient>
+
+    <!-- Outer Bevel Stroke Gradient -->
+    <linearGradient id="bevelStrokeGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#ff858b" />
+      <stop offset="35%" stop-color="#ff2e3a" />
+      <stop offset="70%" stop-color="#800004" />
+      <stop offset="100%" stop-color="#400002" />
+    </linearGradient>
+
+    <!-- Inner Groove Shadow for 3D Cutout Emboss -->
+    <linearGradient id="innerGroove" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3d0002" stop-opacity="0.75" />
+      <stop offset="50%" stop-color="#a80007" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#ff6b73" stop-opacity="0.6" />
+    </linearGradient>
+
+    <!-- 3D Specular Lighting Filter for Gel / Plastic Surface Sheen -->
+    <filter id="glossSheen" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur" />
+      <feSpecularLighting in="blur" surfaceScale="5" specularConstant="1.1" specularExponent="18" lighting-color="#ffffff" result="spec">
+        <fePointLight x="180" y="40" z="220" />
+      </feSpecularLighting>
+      <feComposite in="spec" in2="SourceAlpha" operator="in" result="specCut" />
+      <feComposite in="SourceGraphic" in2="specCut" operator="arithmetic" k1="0" k2="1" k3="0.45" k4="0" />
+    </filter>
+  </defs>
+
+  <g filter="url(#hbDropShadow)">
+    <g filter="url(#glossSheen)">
+      
+      <!-- ========================================== -->
+      <!-- LETTER H: TOP-LEFT PILLAR                  -->
+      <!-- ========================================== -->
+      <path
+        d="
+          M 38,28 
+          C 38,22 43,18 50,18 
+          L 122,18 
+          C 129,18 134,22 134,28 
+          L 134,142 
+          C 134,146 131,149 127,151 
+          L 45,203 
+          C 40,206 38,203 38,198 
+          Z
+        "
+        fill="url(#candyRedGrad)"
+        stroke="url(#bevelStrokeGrad)"
+        stroke-width="3"
+        stroke-linejoin="round"
+      />
+
+      <!-- ========================================== -->
+      <!-- LETTER H: TOP-RIGHT PILLAR                 -->
+      <!-- ========================================== -->
+      <path
+        d="
+          M 174,28 
+          C 174,22 179,18 186,18 
+          L 258,18 
+          C 265,18 270,22 270,28 
+          L 270,198 
+          C 270,203 268,206 263,203 
+          L 181,151 
+          C 177,149 174,146 174,142 
+          Z
+        "
+        fill="url(#candyRedGrad)"
+        stroke="url(#bevelStrokeGrad)"
+        stroke-width="3"
+        stroke-linejoin="round"
+      />
+
+      <!-- ========================================== -->
+      <!-- LETTER H: LOWER HOUSE BODY & ARCH DOORWAY  -->
+      <!-- ========================================== -->
+      <path
+        fill-rule="evenodd"
+        d="
+          M 154,128 
+          C 152,126 148,126 146,128 
+          L 41,194 
+          C 37,197 36,201 36,206 
+          L 36,368 
+          C 36,375 41,380 48,380 
+          L 108,380 
+          C 114,380 118,376 118,370 
+          L 118,296 
+          C 118,272 134,254 150,254 
+          C 166,254 182,272 182,296 
+          L 182,370 
+          C 182,376 186,380 192,380 
+          L 258,380 
+          C 265,380 270,375 270,368 
+          L 270,206 
+          C 270,201 269,197 265,194 
+          Z
+        "
+        fill="url(#candyRedGrad)"
+        stroke="url(#bevelStrokeGrad)"
+        stroke-width="3"
+        stroke-linejoin="round"
+      />
+
+      <!-- ========================================== -->
+      <!-- LETTER B: BOLD 3D EMBOSSED MONOGRAM        -->
+      <!-- ========================================== -->
+      <path
+        fill-rule="evenodd"
+        d="
+          M 298,28 
+          C 298,22 303,18 310,18 
+          L 446,18 
+          C 502,18 534,44 534,104 
+          C 534,142 516,172 478,188 
+          C 528,202 556,236 556,302 
+          C 556,362 516,380 452,380 
+          L 310,380 
+          C 303,380 298,375 298,368 
+          Z 
+          
+          M 368,72 
+          C 368,66 372,62 378,62 
+          L 434,62 
+          C 468,62 486,76 486,104 
+          C 486,132 468,146 434,146 
+          L 378,146 
+          C 372,146 368,142 368,136 
+          Z 
+          
+          M 368,244 
+          C 368,238 372,234 378,234 
+          L 440,234 
+          C 478,234 502,250 502,288 
+          C 502,326 478,342 440,342 
+          L 378,342 
+          C 372,342 368,338 368,332 
+          Z
+        "
+        fill="url(#candyRedGrad)"
+        stroke="url(#bevelStrokeGrad)"
+        stroke-width="3"
+        stroke-linejoin="round"
+      />
+
+    </g>
+
+    <!-- Subtle Inner Bevel Inset Lines for 3D Edge Shine -->
+    <!-- Top left H pillar shine -->
+    <path
+      d="M 45,26 L 118,26 C 122,26 126,29 126,33 L 126,134 L 45,185 Z"
+      fill="none"
+      stroke="url(#topHighlightGrad)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      opacity="0.8"
+    />
+
+    <!-- Top right H pillar shine -->
+    <path
+      d="M 182,33 C 182,29 186,26 190,26 L 263,26 L 263,185 L 182,134 Z"
+      fill="none"
+      stroke="url(#topHighlightGrad)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      opacity="0.8"
+    />
+
+    <!-- House Gable Roof Peak Shine -->
+    <path
+      d="M 150,135 L 44,202 L 44,368 M 150,135 L 262,202 L 262,368"
+      fill="none"
+      stroke="url(#topHighlightGrad)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      opacity="0.75"
+    />
+
+    <!-- Door Arch Bevel Highlight -->
+    <path
+      d="M 124,370 L 124,296 C 124,276 138,260 150,260 C 162,260 176,276 176,296 L 176,370"
+      fill="none"
+      stroke="url(#innerGroove)"
+      stroke-width="3"
+    />
+
+    <!-- Letter B Top Curve Specular Highlight -->
+    <path
+      d="M 306,26 L 442,26 C 492,26 522,48 522,102"
+      fill="none"
+      stroke="url(#topHighlightGrad)"
+      stroke-width="3"
+      stroke-linecap="round"
+      opacity="0.9"
+    />
+
+    <!-- Letter B Middle Inset Highlight -->
+    <path
+      d="M 374,240 L 436,240 C 470,240 492,254 492,288"
+      fill="none"
+      stroke="url(#topHighlightGrad)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      opacity="0.7"
+    />
+
+  </g>
+</svg>

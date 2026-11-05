@@ -1,0 +1,77 @@
+import { MinistryTimelineItem } from '../types';
+
+export const DEFAULT_BOKEO_TIMELINE: MinistryTimelineItem[] = [
+  {
+    id: 'timeline-2018',
+    year: '2022',
+    date: '2022',
+    title: 'ຈຸດເລີ່ມຕົ້ນແຫ່ງການຊົງເອີ້ນ ແລະ ພາລະໃຈ',
+    titleEn: 'The Calling & Beginning of Hope Bokeo',
+    titleTh: 'จุดเริ่มต้นแห่งการทรงเรียกและภาระใจ',
+    description: 'ເລີ່ມຕົ້ນການເດີນທາງຮັບໃຊ້ດ້ວຍອອກໄປປະກາດຂ່າວປະເສີດຕາມບ້ານຕ່າງໆ ກັບເພື່ອນຮັບໃຊ້ດ້ວຍພາລະໃຈໃນການນຳເອົາຄວາມຮັກຂອງພຣະຄຣິດ ແລະ ຄວາມຫວັງໄປສູ່ຊຸມຊົນ ແລະ ໝູ່ບ້ານຫ່າງໄກສອກຫຼີກໃນແຂວງບໍ່ແກ້ວ.',
+    descriptionEn: 'The ministry began by going out to share the Gospel across remote villages with fellow servants carrying a vision to bring the living hope and love of Christ to Bokeo Province.',
+    descriptionTh: 'เริ่มต้นการเดินทางรับใช้ด้วยการออกไปประกาศข่าวประเสริฐตามหมู่บ้านต่างๆ กับเพื่อนผู้รับใช้ที่มีภาระใจนำความรักและความหวังของพระคริสต์ไปสู่ชุมชนในแขวงบ่อแก้ว',
+    imageUrl: '/uploads/timeline_0_0_1790760136842.jpg',
+    imageUrls: [
+      '/uploads/timeline_0_0_1790760136842.jpg',
+      '/uploads/timeline_0_1_1790760137172.jpg',
+    ],
+    order: 1,
+    hidden: false,
+  },
+  {
+    id: 'timeline-2020',
+    year: '2023',
+    date: '2023',
+    title: 'ການຮ່ວມມືກັບຜູ້ຮັບໃຊ້ທ້ອງຖິ່ນ ແລະ ຕັ້ງທີມ',
+    titleEn: 'Partnering with Local Servants & Forming the Team',
+    titleTh: 'การร่วมมือกับผู้รับใช้ท้องถิ่นและตั้งทีม',
+    description: 'ໃນປີນັ້ນ ພຣະເຈົ້າໄດ້ຕອບຄຳອະທິຖານຂອງຂ້ານ້ອຍ ແລະ ໄດ້ສົ່ງຜູ້ຮັບໃຊ້ຂອງພຣະອົງມາຫາຂ້ານ້ອຍ ເພື່ອຮ່ວມມືກັນສ້າງຕັ້ງທີມພັນທະກິດ, ຕັ້ງກຸ່ມນະມັດສະການຕາມບ້ານ ແລະ ຝຶກອົບຮົມຜູ້ນຳທ້ອງຖິ່ນ.',
+    descriptionEn: 'In that year, God answered our prayers and sent His servants to partner with us, forming a dedicated ministry team, establishing house worship groups, and mentoring local leaders.',
+    descriptionTh: 'ในปีนั้น พระเจ้าทรงตอบคำอธิษฐานและส่งผู้รับใช้ของพระองค์มาร่วมมือกันก่อตั้งทีมพันธกิจ ตั้งกลุ่มนมัสการตามบ้าน และฝึกอบรมผู้นำท้องถิ่น',
+    imageUrl: '/uploads/timeline_1_0_1790760137428.jpg',
+    imageUrls: [
+      '/uploads/timeline_1_0_1790760137428.jpg',
+      '/uploads/timeline_1_1_1790760137837.jpg',
+    ],
+    order: 2,
+    hidden: false,
+  },
+  {
+    id: 'timeline-2022',
+    year: '2023 - 2024',
+    date: '2023 - 2024',
+    title: 'ພັນທະກິດເດັກ, ຊາວໜຸ່ມ ແລະ ການສ້າງສາວົກ',
+    titleEn: 'Children & Youth Ministry and Discipleship',
+    titleTh: 'พันธกิจเด็ก เยาวชน และการสร้างสาวก',
+    description: 'ຂະຫຍາຍວຽກງານການສອນພຣະຄຳພີ ແລະ ພາສາລາວໃຫ້ແກ່ເດັກນ້ອຍ, ຈັດຄ້າຍຟື້ນຟູຊາວໜຸ່ມ ແລະ ສ້າງສາວົກຮຸ່ນໃໝ່ໃຫ້ເຕີບໃຫຍ່ໃນຄວາມເຊື່ອ ແລະ ຄວາມຮັກຂອງພຣະເຈົ້າ.',
+    descriptionEn: 'Expanding Bible and literacy teaching for children, organizing youth revival camps, and raising a new generation of disciples grounded in faith and love.',
+    descriptionTh: 'ขยายงานการสอนพระคัมภีร์และภาษาลาวแก่เด็กๆ จัดค่ายฟื้นฟูเยาวชน และสร้างสาวกรุ่นใหม่ให้เติบโตในความเชื่อและความรักของพระเจ้า',
+    imageUrl: '/uploads/timeline_2_0_1790760138092.jpg',
+    imageUrls: [
+      '/uploads/timeline_2_0_1790760138092.jpg',
+    ],
+    order: 3,
+    hidden: false,
+  },
+  {
+    id: 'timeline-2025',
+    year: '2024 - ປັດຈຸບັນ',
+    date: '2024 - ປັດຈຸບັນ',
+    title: 'ການເຊື່ອມໂຍງຄົບ 5 ເມືອງທົ່ວແຂວງບໍ່ແກ້ວ',
+    titleEn: 'Connecting Across All 5 Districts of Bokeo',
+    titleTh: 'การเชื่อมโยงครบ 5 เมืองทั่วแขวงบ่อแก้ว',
+    description: 'ເຊື່ອມໂຍງເຄືອຂ່າຍຜູ້ຮັບໃຊ້, ຄຣິດຕະຈັກ ແລະ ກຸ່ມແຄຣ໌ທົ່ວ 5 ເມືອງ (ຫ້ວຍຊາຍ, ຕົ້ນເຜິ້ງ, ຜາອຸດົມ, ປາກທາ, ແລະ ເມິງ) ຜ່ານແພລດຟອມ HOPE BOKEO ເພື່ອການຕິດຕາມ ແລະ ການເຕີບໂຕທີ່ຍືນຍົງ.',
+    descriptionEn: 'Uniting church planters, leaders, and care groups across Huayxai, Tonpheung, Pha Oudom, Paktha, and Meung via the centralized HOPE BOKEO platform for enduring fruitfulness.',
+    descriptionTh: 'เชื่อมโยงเครือข่ายผู้รับใช้ คริสตจักร และกลุ่มแคร์ทั่วทั้ง 5 เมืองของแขวงบ่อแก้ว ผ่านแพลตฟอร์ม HOPE BOKEO เพื่อการเติบโตอย่างยั่งยืน',
+    imageUrl: '/uploads/timeline_3_0_1790760138340.jpg',
+    imageUrls: [
+      '/uploads/timeline_3_0_1790760138340.jpg',
+      '/uploads/timeline_3_1_1790760138587.jpg',
+    ],
+    order: 4,
+    hidden: false,
+  },
+];
+
+

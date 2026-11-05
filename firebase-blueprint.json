@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "villages": {
+      "title": "Villages",
+      "description": "Church and village records in Bokeo province",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "district": { "type": "string" },
+        "province": { "type": "string" },
+        "heard": { "type": "number" },
+        "believers": { "type": "number" },
+        "baptized": { "type": "number" },
+        "persecution": { "type": "string" },
+        "needs": { "type": "string" },
+        "notes": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "mapUrl": { "type": "string" },
+        "pinCode": { "type": "string" },
+        "date": { "type": "string" },
+        "rowId": { "type": "number" }
+      }
+    },
+    "events": {
+      "title": "Events",
+      "description": "Ministry events and reports",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "imageUrls": { "type": "array", "items": { "type": "string" } },
+        "videoUrl": { "type": "string" },
+        "audioUrl": { "type": "string" },
+        "docUrl": { "type": "string" },
+        "date": { "type": "string" },
+        "rowId": { "type": "number" }
+      }
+    },
+    "teams": {
+      "title": "Teams",
+      "description": "Ministry team members",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "bio": { "type": "string" },
+        "rowId": { "type": "number" }
+      }
+    },
+    "app_config": {
+      "title": "App Configuration",
+      "description": "Global home poster and donation settings",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  },
+  "firestore": {
+    "/villages/{villageId}": {
+      "schema": "villages",
+      "description": "Church and village records"
+    },
+    "/events/{eventId}": {
+      "schema": "events",
+      "description": "Ministry events and reports"
+    },
+    "/teams/{teamId}": {
+      "schema": "teams",
+      "description": "Ministry team members"
+    },
+    "/app_config/{configId}": {
+      "schema": "app_config",
+      "description": "Global home poster and donation settings"
+    }
+  }
+}
