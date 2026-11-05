@@ -36,7 +36,7 @@ import {
 } from 'lucide-react';
 import { EventData, MonthlyReportItem, Language } from '../types';
 import { formatDateRange } from '../utils/dateFormatter';
-import { cleanRichHtml, RichTextEditor } from './RichTextEditor';
+import { cleanRichHtml, RichTextEditor, stripHtmlToText } from './RichTextEditor';
 import { MultiImageUploader } from './MultiImageUploader';
 import { saveEventToFirestore } from '../lib/firestore-service';
 import { uploadFileDirectly } from '../utils/fileUploader';
@@ -638,8 +638,8 @@ const EventReportModalContent: React.FC<EventReportModalProps> = ({
                 >
                   <ArrowLeft className="w-5 h-5 text-[#cc0000]" />
                 </button>
-                <h2 className="text-lg sm:text-2xl lg:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight line-clamp-2">
-                  {displayTitle}
+                <h2 className="text-lg sm:text-2xl lg:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
+                  {stripHtmlToText(displayTitle)}
                 </h2>
               </div>
 
@@ -938,7 +938,7 @@ const EventReportModalContent: React.FC<EventReportModalProps> = ({
                         const hasVideo = Boolean(sub.videoUrl && sub.videoUrl.trim());
                         const hasMedia = hasDoc || hasImages || hasVideo;
                         const totalMediaCount = subDocs.length + subImages.length + (hasVideo ? 1 : 0);
-                        const rawText = subSummary ? subSummary.replace(/<[^>]*>/g, '').trim() : '';
+                        const rawText = stripHtmlToText(subSummary);
                         const hasNarrative = rawText.length > 0;
 
                         // Case 1: Both Media and Narrative exist
@@ -956,7 +956,7 @@ const EventReportModalContent: React.FC<EventReportModalProps> = ({
                                         dangerouslySetInnerHTML={{ __html: cleanRichHtml(subSummary) }}
                                       />
                                     ) : (
-                                      <p className="whitespace-pre-line leading-relaxed">{subSummary}</p>
+                                      <p className="whitespace-pre-line leading-relaxed">{rawText}</p>
                                     )}
                                   </div>
 
@@ -1017,7 +1017,7 @@ const EventReportModalContent: React.FC<EventReportModalProps> = ({
                                       dangerouslySetInnerHTML={{ __html: cleanRichHtml(subSummary) }}
                                     />
                                   ) : (
-                                    <p className="whitespace-pre-line leading-relaxed">{subSummary}</p>
+                                    <p className="whitespace-pre-line leading-relaxed">{rawText}</p>
                                   )}
                                 </div>
 
@@ -1066,7 +1066,7 @@ const EventReportModalContent: React.FC<EventReportModalProps> = ({
                                 dangerouslySetInnerHTML={{ __html: cleanRichHtml(subSummary) }}
                               />
                             ) : (
-                              <p className="whitespace-pre-line leading-relaxed">{subSummary}</p>
+                              <p className="whitespace-pre-line leading-relaxed">{rawText}</p>
                             )}
                           </div>
                         );

@@ -32,7 +32,7 @@ import mammoth from 'mammoth';
 import { EventData, Language, MonthlyReportItem } from '../types';
 import { formatDateRange } from '../utils/dateFormatter';
 import { MultiImageUploader } from './MultiImageUploader';
-import { RichTextEditor, cleanRichHtml } from './RichTextEditor';
+import { RichTextEditor, cleanRichHtml, stripHtmlToText } from './RichTextEditor';
 import { saveEventToFirestore } from '../lib/firestore-service';
 import { uploadFileDirectly } from '../utils/fileUploader';
 import { PdfThumbnail } from './PdfThumbnail';
@@ -1803,8 +1803,8 @@ export const EventModal: React.FC<EventModalProps> = ({
                               </div>
 
                               {displaySubSummary && (
-                                <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
-                                  {displaySubSummary}
+                                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line break-words">
+                                  {stripHtmlToText(displaySubSummary)}
                                 </p>
                               )}
 

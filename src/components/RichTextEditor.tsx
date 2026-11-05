@@ -18,7 +18,7 @@ import { Language } from "../types";
 
 export function cleanRichHtml(html: string): string {
   if (!html) return "";
-  return DOMPurify.sanitize(html, {
+  const sanitized = DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
       "p", "b", "i", "em", "strong", "a", "h1", "h2", "h3", "h4", "h5", "h6",
       "ul", "ol", "li", "br", "span", "div", "img", "blockquote", "table",
@@ -26,6 +26,30 @@ export function cleanRichHtml(html: string): string {
     ],
     ALLOWED_ATTR: ["href", "src", "alt", "title", "class", "style", "target", "rel", "width", "height"],
   });
+  return sanitized
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/\u00A0/g, " ")
+    .trim();
+}
+
+export function stripHtmlToText(input?: string): string {
+  if (!input || typeof input !== "string") return "";
+  return input
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\u00A0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n\n")
+    .trim();
 }
 
 export interface RichTextEditorProps {

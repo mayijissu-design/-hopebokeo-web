@@ -27,6 +27,7 @@ import { getVillageGPS } from './MapsTab';
 import { UpcomingEventPoster } from './UpcomingEventPoster';
 import { RealBokeoMap } from './RealBokeoMap';
 import { handleImageErrorWithFirestore } from '../utils/imageFallback';
+import { stripHtmlToText } from './RichTextEditor';
 
 interface HomeTabProps {
   events: EventData[];
@@ -330,18 +331,18 @@ export const HomeTab: React.FC<HomeTabProps> = ({
       const activeEvents = events.filter((e) => !e.hidden);
       if (activeEvents.length > 0) {
         return activeEvents.slice(0, 8).map((ev, idx) => {
-          const clean = (ev.description || '').replace(/<[^>]*>/g, ' ').slice(0, 150);
+          const clean = stripHtmlToText(ev.description || '');
           return {
             id: ev.id || `event-${ev.rowId || idx}`,
             category: '',
             categoryLo: '',
             categoryTh: '',
-            title: ev.titleEn || ev.title,
-            titleLo: ev.title,
-            titleTh: ev.titleTh || ev.title,
-            excerpt: ev.descriptionEn ? ev.descriptionEn.replace(/<[^>]*>/g, ' ').slice(0, 150) : clean,
+            title: stripHtmlToText(ev.titleEn || ev.title),
+            titleLo: stripHtmlToText(ev.title),
+            titleTh: stripHtmlToText(ev.titleTh || ev.title),
+            excerpt: ev.descriptionEn ? stripHtmlToText(ev.descriptionEn) : clean,
             excerptLo: clean,
-            excerptTh: ev.descriptionTh ? ev.descriptionTh.replace(/<[^>]*>/g, ' ').slice(0, 150) : clean,
+            excerptTh: ev.descriptionTh ? stripHtmlToText(ev.descriptionTh) : clean,
             imageUrl:
               ev.imageUrl ||
               (ev.imageUrls && ev.imageUrls[0]) ||
@@ -1229,9 +1230,9 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                       {displayTitle}
                     </h3>
 
-                    {/* Excerpt */}
-                    <p className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm leading-relaxed line-clamp-3">
-                      {displayExcerpt}
+                    {/* Excerpt - Full description without 3-dot truncation */}
+                    <p className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm leading-relaxed whitespace-pre-line break-words">
+                      {stripHtmlToText(displayExcerpt)}
                     </p>
                   </div>
 
