@@ -65,11 +65,13 @@ app.get(['/health', '/api/health', '/_healthz', '/_ah/health'], (_req, res) => {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Allow cross-origin requests so any browser or static host can sync with the API
+// Allow cross-origin requests and enforce strict X-Robots-Tag noindex on all server responses
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet, noimageindex, notranslate');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }

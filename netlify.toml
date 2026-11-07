@@ -2,6 +2,12 @@
   publish = "dist"
   command = "npm run build"
 
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow, noarchive, nosnippet, noimageindex, notranslate"
+    Referrer-Policy = "no-referrer"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
