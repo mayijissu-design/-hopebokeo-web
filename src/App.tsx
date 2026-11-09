@@ -14,6 +14,7 @@ import { AutoUpdateListener } from './components/AutoUpdateListener';
 import { HbLogo } from './components/HbLogo';
 import { NetworkStatusBar } from './components/NetworkStatusBar';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
+import { SiteAccessGate } from './components/SiteAccessControlSection';
 import { Village, EventData, TeamMember, HomePoster, DonationInfo, Language, BankAccount } from './types';
 import { Sparkles, X, Loader2, WifiOff, Lock } from 'lucide-react';
 import { db, collection, doc, onSnapshot } from './lib/firebase';
@@ -1492,6 +1493,7 @@ export default function App() {
     : 0;
 
   return (
+    <SiteAccessGate homePoster={homePoster} language={language}>
     <div
       className={`${darkMode ? 'dark text-slate-100' : 'text-slate-800'} ${
         !hasCustomBgColor && !hasCustomBgImage
@@ -1893,5 +1895,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </SiteAccessGate>
   );
 }

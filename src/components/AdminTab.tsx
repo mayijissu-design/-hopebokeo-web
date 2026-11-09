@@ -15,6 +15,7 @@ import { AboutPosterSettingsSection } from './AboutPosterSettingsSection';
 import { InsightsPosterSettingsSection } from './InsightsPosterSettingsSection';
 import { CommunitiesSettingsSection } from './CommunitiesSettingsSection';
 import { PrayerSettingsSection } from './PrayerSettingsSection';
+import { SiteAccessSettingsBanner } from './SiteAccessControlSection';
 import { EventReportModal } from './EventReportModal';
 import { formatDateRange } from '../utils/dateFormatter';
 import { compressImageFile, shrinkBase64DataUrl, optimizePosterForFirestore } from '../utils/imageCompressor';
@@ -2627,6 +2628,13 @@ export const AdminTab: React.FC<AdminTabProps> = ({
                       </button>
                     </div>
                   </div>
+
+                  {/* Website Visibility & Link-Only Access Control Banner */}
+                  <SiteAccessSettingsBanner
+                    homePoster={homePoster}
+                    onSaveHomePoster={onSaveHomePoster}
+                    language={language}
+                  />
 
                   <div className="flex flex-col lg:flex-row gap-6 items-start">
         {/* Left Vertical Navigation Sidebar */}

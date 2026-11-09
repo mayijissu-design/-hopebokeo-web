@@ -431,6 +431,9 @@ export interface HomePoster {
   insightsVerseRef?: string;
   insightsVerseRefEn?: string;
   insightsVerseRefTh?: string;
+  // Website Privacy & Access Mode ('link_only' = Private Invite Link Only & No Google Indexing, 'public' = Open to Everyone & Search Engines)
+  siteAccessMode?: 'link_only' | 'public';
+  siteAccessKey?: string;
   updatedAt?: string;
 }
 
