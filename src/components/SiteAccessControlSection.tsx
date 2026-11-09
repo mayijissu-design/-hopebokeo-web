@@ -13,9 +13,12 @@ import {
 import { HomePoster, Language } from '../types';
 
 const ACCESS_SESSION_KEY = 'hb_site_session_unlocked_key';
+const ACCESS_SESSION_LINK_KEY = 'hb_site_session_unlocked_link';
 const SITE_ACCESS_CONFIG_STORAGE_KEY = 'hb_site_access_config';
 const SITE_ACCESS_COOKIE_NAME = 'hb_site_access_cfg';
+
 export const DEFAULT_SITE_ACCESS_KEY = 'hb2026';
+export const DEFAULT_CUSTOM_LINK_SLUG = 'hopebokeo-prv';
 
 export interface StoredSiteAccessConfig {
   siteAccessMode: 'link_only' | 'public';
@@ -26,6 +29,7 @@ export interface StoredSiteAccessConfig {
 
 const RESERVED_TAB_NAMES = new Set([
   '',
+  'index.html',
   'home',
   'insights',
   'dashboard',
@@ -33,7 +37,21 @@ const RESERVED_TAB_NAMES = new Set([
   'settings',
   'admin',
   'church-portal',
+  'church',
+  'churches',
+  'church_update',
+  'church-update',
+  'finance',
+  'hub',
 ]);
+
+// Capture the exact initial landing URL before any router/tab effect modifies window.location
+const INITIAL_LANDING_PATH =
+  typeof window !== 'undefined' ? window.location.pathname : '';
+const INITIAL_LANDING_SEARCH =
+  typeof window !== 'undefined' ? window.location.search : '';
+const INITIAL_LANDING_HASH =
+  typeof window !== 'undefined' ? window.location.hash : '';
 
 function isSearchEngineBot(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -41,6 +59,134 @@ function isSearchEngineBot(): boolean {
   return /googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|ia_archiver|semrushbot|ahrefsbot|mj12bot|dotbot|petalbot/i.test(
     ua
   );
+}
+
+export function getSiteBaseOrigin(): string {
+  if (
+    typeof window !== 'undefined' &&
+    window.location.hostname &&
+    !window.location.hostname.includes('run.app') &&
+    window.location.hostname !== 'localhost'
+  ) {
+    return window.location.origin;
+  }
+  return 'https://hopebokeo.org';
+}
+
+/**
+ * Extracts a clean custom link slug (without domain and without any passcode)
+ * from any user input or stored URL.
+ * Also rescues typos like `https://hopebokeo-prv.org/?key=hb2026` -> `hopebokeo-prv`.
+ */
+export function extractCustomLinkSlug(
+  rawUrlOrSlug?: string,
+  currentPasscode?: string
+): string {
+  if (!rawUrlOrSlug || typeof rawUrlOrSlug !== 'string') return '';
+  const trimmed = rawUrlOrSlug.trim();
+  if (!trimmed) return '';
+
+  const passLower = (currentPasscode || '').trim().toLowerCase();
+
+  // If it starts with http:// or https://, parse it carefully
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      let pathSlug = decodeURIComponent(parsed.pathname.replace(/^\/+|\/+$/g, '').trim());
+
+      // Check if user accidentally edited the domain name itself (e.g., hopebokeo-prv.org)
+      const host = parsed.hostname.toLowerCase();
+      let domainCustomization = '';
+      if (
+        host !== 'hopebokeo.org' &&
+        host !== 'www.hopebokeo.org' &&
+        host !== 'localhost' &&
+        !host.includes('run.app') &&
+        !host.includes('netlify.app') &&
+        !host.includes('vercel.app')
+      ) {
+        domainCustomization = host.replace(/\.(org|com|net|la|info)$/i, '');
+      }
+
+      if (pathSlug && !RESERVED_TAB_NAMES.has(pathSlug.toLowerCase())) {
+        if (passLower && pathSlug.toLowerCase() === passLower) {
+          return domainCustomization || DEFAULT_CUSTOM_LINK_SLUG;
+        }
+        return pathSlug;
+      }
+
+      // Check query params (excluding ?key=passcode)
+      for (const [k, v] of parsed.searchParams.entries()) {
+        const cleanV = v.trim();
+        const cleanK = k.trim();
+        if (k.toLowerCase() === 'key') continue; // Never use ?key=passcode as the link slug
+        if (
+          cleanV &&
+          !RESERVED_TAB_NAMES.has(cleanV.toLowerCase()) &&
+          cleanV.toLowerCase() !== passLower
+        ) {
+          return cleanV;
+        }
+        if (
+          cleanK &&
+          !RESERVED_TAB_NAMES.has(cleanK.toLowerCase()) &&
+          cleanK.toLowerCase() !== passLower
+        ) {
+          return cleanK;
+        }
+      }
+
+      // Check hash
+      const cleanHash = parsed.hash.replace(/^#+/, '').trim();
+      if (
+        cleanHash &&
+        !RESERVED_TAB_NAMES.has(cleanHash.toLowerCase()) &&
+        cleanHash.toLowerCase() !== passLower
+      ) {
+        return cleanHash;
+      }
+
+      if (domainCustomization) {
+        return domainCustomization;
+      }
+
+      return '';
+    } catch {
+      return '';
+    }
+  }
+
+  // Otherwise treat as a direct slug or relative path
+  const withoutOrigin = trimmed
+    .replace(/^[a-z0-9.-]+\.(org|com|net|la)\/?/i, '')
+    .split('?')[0]
+    .replace(/^[/#]+|[/#]+$/g, '')
+    .trim();
+
+  if (
+    !withoutOrigin ||
+    RESERVED_TAB_NAMES.has(withoutOrigin.toLowerCase()) ||
+    (passLower && withoutOrigin.toLowerCase() === passLower)
+  ) {
+    return '';
+  }
+
+  return withoutOrigin;
+}
+
+/**
+ * Builds the full shareable URL from a custom slug without ever including the passcode.
+ */
+export function buildCleanCustomShareUrl(
+  rawUrlOrSlug?: string,
+  currentPasscode?: string,
+  baseOrigin?: string
+): string {
+  const origin = (baseOrigin || getSiteBaseOrigin()).replace(/\/+$/, '');
+  const slug =
+    extractCustomLinkSlug(rawUrlOrSlug, currentPasscode) || DEFAULT_CUSTOM_LINK_SLUG;
+  const cleanSlug = slug.replace(/^\/+/, '');
+  return `${origin}/${cleanSlug}`;
 }
 
 function readCookieConfig(): StoredSiteAccessConfig | null {
@@ -53,10 +199,11 @@ function readCookieConfig(): StoredSiteAccessConfig | null {
     const raw = decodeURIComponent(match.split('=').slice(1).join('='));
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.siteAccessKey === 'string' && parsed.siteAccessKey.trim()) {
+      const key = parsed.siteAccessKey.trim();
       return {
         siteAccessMode: parsed.siteAccessMode === 'public' ? 'public' : 'link_only',
-        siteAccessKey: parsed.siteAccessKey.trim(),
-        siteCustomShareUrl: typeof parsed.siteCustomShareUrl === 'string' ? parsed.siteCustomShareUrl.trim() : '',
+        siteAccessKey: key,
+        siteCustomShareUrl: buildCleanCustomShareUrl(parsed.siteCustomShareUrl, key),
         updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
       };
     }
@@ -72,11 +219,11 @@ export function getStoredSiteAccessConfig(): StoredSiteAccessConfig | null {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.siteAccessKey === 'string' && parsed.siteAccessKey.trim()) {
+          const key = parsed.siteAccessKey.trim();
           localCfg = {
             siteAccessMode: parsed.siteAccessMode === 'public' ? 'public' : 'link_only',
-            siteAccessKey: parsed.siteAccessKey.trim(),
-            siteCustomShareUrl:
-              typeof parsed.siteCustomShareUrl === 'string' ? parsed.siteCustomShareUrl.trim() : '',
+            siteAccessKey: key,
+            siteCustomShareUrl: buildCleanCustomShareUrl(parsed.siteCustomShareUrl, key),
             updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
           };
         }
@@ -94,10 +241,12 @@ export function getStoredSiteAccessConfig(): StoredSiteAccessConfig | null {
 }
 
 export function saveStoredSiteAccessConfig(config: StoredSiteAccessConfig): void {
+  const cleanKey = (config.siteAccessKey || '').trim() || DEFAULT_SITE_ACCESS_KEY;
+  const cleanUrl = buildCleanCustomShareUrl(config.siteCustomShareUrl, cleanKey);
   const clean: StoredSiteAccessConfig = {
     siteAccessMode: config.siteAccessMode === 'public' ? 'public' : 'link_only',
-    siteAccessKey: (config.siteAccessKey || '').trim() || DEFAULT_SITE_ACCESS_KEY,
-    siteCustomShareUrl: (config.siteCustomShareUrl || '').trim(),
+    siteAccessKey: cleanKey,
+    siteCustomShareUrl: cleanUrl,
     updatedAt: config.updatedAt || new Date().toISOString(),
   };
 
@@ -144,7 +293,9 @@ export function saveStoredSiteAccessConfig(config: StoredSiteAccessConfig): void
 export function resolveEffectiveSiteAccessConfig(homePoster?: HomePoster): StoredSiteAccessConfig {
   const stored = getStoredSiteAccessConfig();
   const posterHasKey = Boolean(
-    homePoster?.siteAccessKey && typeof homePoster.siteAccessKey === 'string' && homePoster.siteAccessKey.trim()
+    homePoster?.siteAccessKey &&
+      typeof homePoster.siteAccessKey === 'string' &&
+      homePoster.siteAccessKey.trim()
   );
 
   if (stored && posterHasKey) {
@@ -153,10 +304,14 @@ export function resolveEffectiveSiteAccessConfig(homePoster?: HomePoster): Store
     if (sTime >= pTime) {
       return stored;
     }
+    const pKey = homePoster!.siteAccessKey!.trim();
     return {
       siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
-      siteAccessKey: homePoster!.siteAccessKey!.trim(),
-      siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim() || stored.siteCustomShareUrl,
+      siteAccessKey: pKey,
+      siteCustomShareUrl: buildCleanCustomShareUrl(
+        homePoster?.siteCustomShareUrl || stored.siteCustomShareUrl,
+        pKey
+      ),
       updatedAt: homePoster?.updatedAt || stored.updatedAt,
     };
   }
@@ -166,10 +321,11 @@ export function resolveEffectiveSiteAccessConfig(homePoster?: HomePoster): Store
   }
 
   if (posterHasKey) {
+    const pKey = homePoster!.siteAccessKey!.trim();
     return {
       siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
-      siteAccessKey: homePoster!.siteAccessKey!.trim(),
-      siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim(),
+      siteAccessKey: pKey,
+      siteCustomShareUrl: buildCleanCustomShareUrl(homePoster?.siteCustomShareUrl, pKey),
       updatedAt: homePoster?.updatedAt || '',
     };
   }
@@ -177,99 +333,111 @@ export function resolveEffectiveSiteAccessConfig(homePoster?: HomePoster): Store
   return {
     siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
     siteAccessKey: DEFAULT_SITE_ACCESS_KEY,
-    siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim(),
+    siteCustomShareUrl: buildCleanCustomShareUrl(
+      homePoster?.siteCustomShareUrl,
+      DEFAULT_SITE_ACCESS_KEY
+    ),
     updatedAt: homePoster?.updatedAt || '',
   };
 }
 
-function buildShareUrlWithKey(baseUrlInput: string, keyInput: string, defaultOrigin: string): string {
-  const cleanKey = keyInput.trim() || DEFAULT_SITE_ACCESS_KEY;
-  const trimmedUrl = (baseUrlInput || '').trim();
-  if (!trimmedUrl) {
-    return `${defaultOrigin}/?key=${encodeURIComponent(cleanKey)}`;
-  }
-  try {
-    const parsed = new URL(
-      trimmedUrl.startsWith('http')
-        ? trimmedUrl
-        : `${defaultOrigin}/${trimmedUrl.replace(/^\/+/, '')}`
-    );
-    parsed.searchParams.set('key', cleanKey);
-    return parsed.toString();
-  } catch {
-    const base = trimmedUrl.split('?')[0] || defaultOrigin;
-    return `${base}?key=${encodeURIComponent(cleanKey)}`;
-  }
-}
-
 /**
- * Checks if the current browser URL contains the exact secret passcode (`expectedKey`) in its query/hash/path.
+ * Checks if the visitor entered the website via the Custom Invite Link (`siteCustomShareUrl`).
+ * Visitors entering via the custom invite link bypass the passcode screen automatically.
+ * Visitors entering the main website directly (e.g., `/`) must enter the passcode.
  */
-function doesCurrentUrlContainSecretLink(expectedKey: string): boolean {
+function doesVisitorUrlMatchCustomLink(
+  customShareUrl: string,
+  currentPasscode: string
+): boolean {
   if (typeof window === 'undefined') return false;
-  const target = expectedKey.trim();
-  if (!target) return false;
-  const targetLower = target.toLowerCase();
+  const expectedSlug = extractCustomLinkSlug(customShareUrl, currentPasscode);
+  if (!expectedSlug) return false;
+  const targetLower = expectedSlug.trim().toLowerCase();
 
   try {
-    // 1. Check query parameters (?key=..., ?invite=..., etc.)
-    const searchParams = new URLSearchParams(window.location.search);
-    for (const [k, v] of searchParams.entries()) {
-      const cleanV = v.trim();
-      const cleanK = k.trim();
+    // 1. Check both initial landing pathname and current pathname (e.g. /hopebokeo-prv or /prv)
+    const candidatePaths = [
+      INITIAL_LANDING_PATH,
+      window.location.pathname,
+    ];
+    for (const rawPath of candidatePaths) {
+      const cleanPath = decodeURIComponent((rawPath || '').replace(/^\/+|\/+$/g, '').trim());
       if (
-        cleanV === target ||
-        cleanV.toLowerCase() === targetLower ||
-        cleanK === target ||
-        cleanK.toLowerCase() === targetLower
+        cleanPath &&
+        !RESERVED_TAB_NAMES.has(cleanPath.toLowerCase()) &&
+        cleanPath.toLowerCase() === targetLower
       ) {
         return true;
       }
     }
 
-    // 2. Check hash parameters (e.g. #key=... or #secretToken)
-    const rawHash = (window.location.hash || '').replace(/^#+/, '').trim();
-    if (rawHash && !RESERVED_TAB_NAMES.has(rawHash.toLowerCase())) {
-      if (rawHash.includes('=')) {
-        const hashParams = new URLSearchParams(
-          rawHash.includes('?') ? rawHash.substring(rawHash.indexOf('?')) : rawHash
-        );
-        for (const [, v] of hashParams.entries()) {
-          if (v.trim() === target || v.trim().toLowerCase() === targetLower) {
-            return true;
-          }
+    // 2. Check query parameters (?invite=..., ?link=..., or ?<slug>)
+    const candidateSearches = [
+      INITIAL_LANDING_SEARCH,
+      window.location.search,
+    ];
+    for (const rawSearch of candidateSearches) {
+      if (!rawSearch) continue;
+      const searchParams = new URLSearchParams(rawSearch);
+      for (const [k, v] of searchParams.entries()) {
+        if (
+          v.trim().toLowerCase() === targetLower ||
+          k.trim().toLowerCase() === targetLower
+        ) {
+          return true;
         }
-      } else if (rawHash === target || rawHash.toLowerCase() === targetLower) {
-        return true;
       }
     }
 
-    // 3. Check custom path slug
-    const pathSlug = decodeURIComponent(window.location.pathname.replace(/^\/+|\/+$/g, '').trim());
-    if (
-      pathSlug &&
-      !RESERVED_TAB_NAMES.has(pathSlug.toLowerCase()) &&
-      (pathSlug === target || pathSlug.toLowerCase() === targetLower)
-    ) {
-      return true;
+    // 3. Check hash (e.g. #hopebokeo-prv)
+    const candidateHashes = [
+      INITIAL_LANDING_HASH,
+      window.location.hash,
+    ];
+    for (const rawH of candidateHashes) {
+      const cleanHash = decodeURIComponent((rawH || '').replace(/^#+/, '').trim());
+      if (
+        cleanHash &&
+        !RESERVED_TAB_NAMES.has(cleanHash.toLowerCase()) &&
+        cleanHash.toLowerCase() === targetLower
+      ) {
+        return true;
+      }
     }
   } catch {}
   return false;
 }
 
-function cleanInviteKeyFromUrl(): void {
+function cleanCustomLinkFromAddressBar(expectedSlug: string): void {
   if (typeof window === 'undefined') return;
   try {
     const url = new URL(window.location.href);
     let modified = false;
-    ['key', 'invite', 'access', 'token'].forEach((param) => {
+
+    const currentPath = decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, '').trim());
+    if (
+      currentPath &&
+      !RESERVED_TAB_NAMES.has(currentPath.toLowerCase()) &&
+      currentPath.toLowerCase() === expectedSlug.trim().toLowerCase()
+    ) {
+      url.pathname = '/';
+      modified = true;
+    }
+
+    ['key', 'invite', 'access', 'token', 'link'].forEach((param) => {
       if (url.searchParams.has(param)) {
         url.searchParams.delete(param);
         modified = true;
       }
     });
+
     if (modified) {
-      window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        url.pathname + url.search + url.hash
+      );
     }
   } catch {}
 }
@@ -318,7 +486,12 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
   useEffect(() => {
     const next = resolveEffectiveSiteAccessConfig(homePoster);
     setEffectiveConfig(next);
-  }, [homePoster?.siteAccessMode, homePoster?.siteAccessKey, homePoster?.siteCustomShareUrl, homePoster?.updatedAt]);
+  }, [
+    homePoster?.siteAccessMode,
+    homePoster?.siteAccessKey,
+    homePoster?.siteCustomShareUrl,
+    homePoster?.updatedAt,
+  ]);
 
   useEffect(() => {
     const handleConfigUpdated = (e: Event) => {
@@ -335,6 +508,9 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const accessMode = effectiveConfig.siteAccessMode;
   const expectedKey = (effectiveConfig.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
+  const customShareUrl = effectiveConfig.siteCustomShareUrl;
+  const customSlug =
+    extractCustomLinkSlug(customShareUrl, expectedKey) || DEFAULT_CUSTOM_LINK_SLUG;
 
   const [inputKey, setInputKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -349,16 +525,27 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const [isAuthorized, setIsAuthorized] = useState<boolean>(() => {
     if (isSearchEngineBot()) return false;
-    if (doesCurrentUrlContainSecretLink(expectedKey)) {
+
+    // 1. Entered via the Custom Share Link -> Enter immediately without passcode!
+    if (doesVisitorUrlMatchCustomLink(customShareUrl, expectedKey)) {
       try {
-        sessionStorage.setItem(ACCESS_SESSION_KEY, expectedKey);
+        sessionStorage.setItem(ACCESS_SESSION_LINK_KEY, customSlug);
       } catch {}
-      cleanInviteKeyFromUrl();
+      cleanCustomLinkFromAddressBar(customSlug);
       return true;
     }
+
+    // 2. Check existing session unlocked via Custom Link or Passcode
     try {
-      const saved = sessionStorage.getItem(ACCESS_SESSION_KEY);
-      if (saved && doesPasscodeStrictlyMatch(saved, expectedKey)) {
+      const savedLinkSlug = sessionStorage.getItem(ACCESS_SESSION_LINK_KEY);
+      if (
+        savedLinkSlug &&
+        savedLinkSlug.trim().toLowerCase() === customSlug.trim().toLowerCase()
+      ) {
+        return true;
+      }
+      const savedKey = sessionStorage.getItem(ACCESS_SESSION_KEY);
+      if (savedKey && doesPasscodeStrictlyMatch(savedKey, expectedKey)) {
         return true;
       }
     } catch {}
@@ -373,6 +560,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     const handleLockNow = () => {
       try {
         sessionStorage.removeItem(ACCESS_SESSION_KEY);
+        sessionStorage.removeItem(ACCESS_SESSION_LINK_KEY);
       } catch {}
       setInputKey('');
       setErrorMsg('');
@@ -387,23 +575,31 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
       setIsAuthorized(false);
       return;
     }
-    if (doesCurrentUrlContainSecretLink(expectedKey)) {
+    if (doesVisitorUrlMatchCustomLink(customShareUrl, expectedKey)) {
       try {
-        sessionStorage.setItem(ACCESS_SESSION_KEY, expectedKey);
+        sessionStorage.setItem(ACCESS_SESSION_LINK_KEY, customSlug);
       } catch {}
-      cleanInviteKeyFromUrl();
+      cleanCustomLinkFromAddressBar(customSlug);
       setIsAuthorized(true);
       return;
     }
     try {
-      const saved = sessionStorage.getItem(ACCESS_SESSION_KEY);
-      if (saved && doesPasscodeStrictlyMatch(saved, expectedKey)) {
+      const savedLinkSlug = sessionStorage.getItem(ACCESS_SESSION_LINK_KEY);
+      if (
+        savedLinkSlug &&
+        savedLinkSlug.trim().toLowerCase() === customSlug.trim().toLowerCase()
+      ) {
+        setIsAuthorized(true);
+        return;
+      }
+      const savedKey = sessionStorage.getItem(ACCESS_SESSION_KEY);
+      if (savedKey && doesPasscodeStrictlyMatch(savedKey, expectedKey)) {
         setIsAuthorized(true);
         return;
       }
     } catch {}
     setIsAuthorized(false);
-  }, [expectedKey]);
+  }, [expectedKey, customShareUrl, customSlug]);
 
   if (accessMode === 'public') {
     return <>{children}</>;
@@ -415,9 +611,12 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const handleUnlockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Always re-read latest config on submit in case it was just updated
     const latestConfig = resolveEffectiveSiteAccessConfig(homePoster);
-    const activeExpectedKey = (latestConfig.siteAccessKey || expectedKey || DEFAULT_SITE_ACCESS_KEY).trim();
+    const activeExpectedKey = (
+      latestConfig.siteAccessKey ||
+      expectedKey ||
+      DEFAULT_SITE_ACCESS_KEY
+    ).trim();
 
     if (doesPasscodeStrictlyMatch(inputKey, activeExpectedKey)) {
       try {
@@ -453,8 +652,8 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
           </h1>
           <p className="text-xs text-slate-400">
             {language === 'lo'
-              ? 'ເວັບໄຊສ່ວນຕົວ — ກະລຸນາປ້ອນລະຫັດ ຫຼື ເຂົ້າຜ່ານລິ້ງທີ່ໄດ້ຮັບ'
-              : 'Private website — Enter passcode or use your invite link'}
+              ? 'ເວັບໄຊສ່ວນຕົວ — ກະລຸນາປ້ອນລະຫັດເພື່ອເຂົ້າສູ່ເວັບໄຊ'
+              : 'Private website — Please enter passcode to access'}
           </p>
         </div>
 
@@ -508,23 +707,18 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
   onSaveHomePoster,
   language,
 }) => {
-  const defaultOrigin =
-    typeof window !== 'undefined' &&
-    window.location.hostname &&
-    !window.location.hostname.includes('run.app') &&
-    window.location.hostname !== 'localhost'
-      ? window.location.origin
-      : 'https://hopebokeo.org';
-
+  const defaultOrigin = getSiteBaseOrigin();
   const initialEffective = resolveEffectiveSiteAccessConfig(homePoster);
 
   const [currentMode, setCurrentMode] = useState<'link_only' | 'public'>(
     initialEffective.siteAccessMode
   );
   const [customKey, setCustomKey] = useState<string>(initialEffective.siteAccessKey);
-  const [customUrl, setCustomUrl] = useState<string>(
-    initialEffective.siteCustomShareUrl ||
-      buildShareUrlWithKey('', initialEffective.siteAccessKey, defaultOrigin)
+  const [customSlug, setCustomSlug] = useState<string>(() =>
+    extractCustomLinkSlug(
+      initialEffective.siteCustomShareUrl,
+      initialEffective.siteAccessKey
+    ) || DEFAULT_CUSTOM_LINK_SLUG
   );
   const [copiedLink, setCopiedLink] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -537,25 +731,29 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
     const eff = resolveEffectiveSiteAccessConfig(homePoster);
     setCurrentMode(eff.siteAccessMode);
     setCustomKey(eff.siteAccessKey);
-    setCustomUrl(
-      eff.siteCustomShareUrl || buildShareUrlWithKey('', eff.siteAccessKey, defaultOrigin)
+    setCustomSlug(
+      extractCustomLinkSlug(eff.siteCustomShareUrl, eff.siteAccessKey) ||
+        DEFAULT_CUSTOM_LINK_SLUG
     );
   }, [
     homePoster?.siteAccessMode,
     homePoster?.siteAccessKey,
     homePoster?.siteCustomShareUrl,
     homePoster?.updatedAt,
-    defaultOrigin,
   ]);
 
   const persistAccessSettingsEverywhere = async (
     nextMode: 'link_only' | 'public',
     nextKeyRaw: string,
-    nextUrlRaw: string,
+    nextSlugRaw: string,
     showFeedback = true
   ) => {
     const cleanKey = nextKeyRaw.trim() || DEFAULT_SITE_ACCESS_KEY;
-    const cleanUrl = buildShareUrlWithKey(nextUrlRaw, cleanKey, defaultOrigin);
+    const cleanSlug =
+      extractCustomLinkSlug(nextSlugRaw, cleanKey) ||
+      nextSlugRaw.trim().replace(/^[/#?]+|[/#?]+$/g, '') ||
+      DEFAULT_CUSTOM_LINK_SLUG;
+    const cleanFullUrl = `${defaultOrigin.replace(/\/+$/, '')}/${cleanSlug}`;
     const nowIso = new Date().toISOString();
 
     if (showFeedback) setIsSaving(true);
@@ -565,13 +763,14 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
       saveStoredSiteAccessConfig({
         siteAccessMode: nextMode,
         siteAccessKey: cleanKey,
-        siteCustomShareUrl: cleanUrl,
+        siteCustomShareUrl: cleanFullUrl,
         updatedAt: nowIso,
       });
 
-      // 2. Keep current admin tab unlocked with the new passcode while in Settings
+      // 2. Keep current admin tab unlocked while editing in Settings
       try {
         sessionStorage.setItem(ACCESS_SESSION_KEY, cleanKey);
+        sessionStorage.setItem(ACCESS_SESSION_LINK_KEY, cleanSlug);
       } catch {}
 
       syncRobotsMetaTags(nextMode);
@@ -583,7 +782,7 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
         body: JSON.stringify({
           siteAccessMode: nextMode,
           siteAccessKey: cleanKey,
-          siteCustomShareUrl: cleanUrl,
+          siteCustomShareUrl: cleanFullUrl,
           updatedAt: nowIso,
         }),
       }).catch(() => {});
@@ -594,7 +793,7 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
           ...homePoster,
           siteAccessMode: nextMode,
           siteAccessKey: cleanKey,
-          siteCustomShareUrl: cleanUrl,
+          siteCustomShareUrl: cleanFullUrl,
           updatedAt: nowIso,
         });
       }
@@ -608,25 +807,22 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
     }
   };
 
+  // Changing the Passcode ONLY updates the Passcode — NEVER modifies or appears in the Link box!
   const handleKeyChange = (val: string) => {
     isTypingRef.current = true;
     setCustomKey(val);
-    const trimmedVal = val.trim();
-    const updatedUrl = trimmedVal
-      ? buildShareUrlWithKey(customUrl, trimmedVal, defaultOrigin)
-      : customUrl;
-    if (trimmedVal) {
-      setCustomUrl(updatedUrl);
-      const nowIso = new Date().toISOString();
-      // Immediately activate the new passcode in storage & session so even before clicking Save, this exact passcode is active
+    const trimmedKey = val.trim();
+    if (trimmedKey) {
+      const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
+      const cleanFullUrl = `${defaultOrigin.replace(/\/+$/, '')}/${cleanSlug}`;
       saveStoredSiteAccessConfig({
         siteAccessMode: currentMode,
-        siteAccessKey: trimmedVal,
-        siteCustomShareUrl: updatedUrl,
-        updatedAt: nowIso,
+        siteAccessKey: trimmedKey,
+        siteCustomShareUrl: cleanFullUrl,
+        updatedAt: new Date().toISOString(),
       });
       try {
-        sessionStorage.setItem(ACCESS_SESSION_KEY, trimmedVal);
+        sessionStorage.setItem(ACCESS_SESSION_KEY, trimmedKey);
       } catch {}
     }
     setTimeout(() => {
@@ -634,62 +830,65 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
     }, 800);
   };
 
-  const handleUrlChange = (val: string) => {
+  // Changing the Custom Link ONLY updates the Custom Link — NEVER modifies the Passcode box!
+  const handleSlugChange = (val: string) => {
     isTypingRef.current = true;
-    setCustomUrl(val);
-    // If user changed ?key=... inside the URL box directly, keep the passcode box in sync
+    // If user pasted a full URL (e.g. https://hopebokeo.org/my-link or https://hopebokeo-prv.org), extract just the custom slug
+    const cleaned = /^https?:\/\//i.test(val.trim())
+      ? extractCustomLinkSlug(val, customKey)
+      : val.replace(/^\/+/, '').replace(/\s+/g, '-');
+    setCustomSlug(cleaned);
+
+    const activeSlug = cleaned.trim() || DEFAULT_CUSTOM_LINK_SLUG;
+    const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+    const cleanFullUrl = `${defaultOrigin.replace(/\/+$/, '')}/${activeSlug}`;
+
+    saveStoredSiteAccessConfig({
+      siteAccessMode: currentMode,
+      siteAccessKey: cleanKey,
+      siteCustomShareUrl: cleanFullUrl,
+      updatedAt: new Date().toISOString(),
+    });
     try {
-      const parsed = new URL(
-        val.trim().startsWith('http')
-          ? val.trim()
-          : `${defaultOrigin}/${val.trim().replace(/^\/+/, '')}`
-      );
-      const keyParam = parsed.searchParams.get('key');
-      if (keyParam && keyParam.trim()) {
-        const cleanK = keyParam.trim();
-        setCustomKey(cleanK);
-        saveStoredSiteAccessConfig({
-          siteAccessMode: currentMode,
-          siteAccessKey: cleanK,
-          siteCustomShareUrl: val.trim(),
-          updatedAt: new Date().toISOString(),
-        });
-        try {
-          sessionStorage.setItem(ACCESS_SESSION_KEY, cleanK);
-        } catch {}
-      }
+      sessionStorage.setItem(ACCESS_SESSION_LINK_KEY, activeSlug);
     } catch {}
+
     setTimeout(() => {
       isTypingRef.current = false;
     }, 800);
   };
 
   const handleToggleMode = async () => {
-    const nextMode: 'link_only' | 'public' = currentMode === 'link_only' ? 'public' : 'link_only';
+    const nextMode: 'link_only' | 'public' =
+      currentMode === 'link_only' ? 'public' : 'link_only';
     setCurrentMode(nextMode);
-    await persistAccessSettingsEverywhere(nextMode, customKey, customUrl, true);
+    await persistAccessSettingsEverywhere(nextMode, customKey, customSlug, true);
   };
 
   const handleLockNowClick = async () => {
     const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
-    const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+    const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
     setCustomKey(cleanKey);
-    setCustomUrl(cleanUrl);
-    await persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, false);
+    setCustomSlug(cleanSlug);
+    await persistAccessSettingsEverywhere(currentMode, cleanKey, cleanSlug, false);
     window.dispatchEvent(new CustomEvent('hb_preview_lock_screen'));
   };
 
   const handleCopyLink = () => {
     const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
-    const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
-    setCustomUrl(cleanUrl);
-    persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, false).catch(() => {});
-    navigator.clipboard?.writeText(cleanUrl).catch(() => {});
+    const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
+    const fullShareUrl = `${defaultOrigin.replace(/\/+$/, '')}/${cleanSlug}`;
+    setCustomSlug(cleanSlug);
+    persistAccessSettingsEverywhere(currentMode, cleanKey, cleanSlug, false).catch(
+      () => {}
+    );
+    navigator.clipboard?.writeText(fullShareUrl).catch(() => {});
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const isPrivate = currentMode === 'link_only';
+  const displayOriginPrefix = `${defaultOrigin.replace(/\/+$/, '')}/`;
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-3 sm:px-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -734,21 +933,34 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
         </button>
       </div>
 
-      {/* Right: Custom Link Input + Custom Passcode Input + Save & Copy Buttons */}
+      {/* Right: Separate Custom Link Box + Separate Custom Passcode Box + Save & Copy Buttons */}
       <div className="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center gap-2">
-        {/* Editable Custom Link */}
-        <div className="relative flex-1 min-w-0">
-          <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        {/* 1. Custom Link Box (Independent from Passcode; preserves domain so link always works) */}
+        <div className="flex items-center flex-1 min-w-0 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 focus-within:border-[#cc0000] overflow-hidden">
+          <span className="pl-2.5 pr-1 py-1.5 text-xs font-mono text-slate-400 dark:text-slate-500 flex items-center gap-1.5 select-none shrink-0">
+            <Link2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span>{displayOriginPrefix}</span>
+          </span>
           <input
             type="text"
-            value={customUrl}
-            onChange={(e) => handleUrlChange(e.target.value)}
-            placeholder={language === 'lo' ? 'ຕັ້ງລິ້ງເອງ...' : 'Custom link...'}
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 outline-none focus:border-[#cc0000]"
+            value={customSlug}
+            onChange={(e) => handleSlugChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+                const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
+                setCustomKey(cleanKey);
+                setCustomSlug(cleanSlug);
+                persistAccessSettingsEverywhere(currentMode, cleanKey, cleanSlug, true);
+              }
+            }}
+            placeholder={language === 'lo' ? 'ຕັ້ງຊື່ລິ້ງເອງ...' : 'custom-link...'}
+            className="w-full pr-3 py-1.5 bg-transparent text-xs font-mono font-bold text-slate-800 dark:text-slate-100 outline-none min-w-[90px]"
           />
         </div>
 
-        {/* Editable Custom Passcode / Key */}
+        {/* 2. Separate Custom Passcode Box (For visitors entering the main website directly) */}
         <div className="relative sm:w-44 shrink-0">
           <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
@@ -759,10 +971,10 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
               if (e.key === 'Enter') {
                 e.preventDefault();
                 const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
-                const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+                const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
                 setCustomKey(cleanKey);
-                setCustomUrl(cleanUrl);
-                persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, true);
+                setCustomSlug(cleanSlug);
+                persistAccessSettingsEverywhere(currentMode, cleanKey, cleanSlug, true);
               }
             }}
             placeholder={language === 'lo' ? 'ຕັ້ງລະຫັດເອງ...' : 'Custom key...'}
@@ -777,10 +989,10 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
             disabled={isSaving}
             onClick={() => {
               const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
-              const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+              const cleanSlug = customSlug.trim() || DEFAULT_CUSTOM_LINK_SLUG;
               setCustomKey(cleanKey);
-              setCustomUrl(cleanUrl);
-              persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, true);
+              setCustomSlug(cleanSlug);
+              persistAccessSettingsEverywhere(currentMode, cleanKey, cleanSlug, true);
             }}
             className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition active:scale-95"
           >
