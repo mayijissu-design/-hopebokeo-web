@@ -434,6 +434,7 @@ export interface HomePoster {
   // Website Privacy & Access Mode ('link_only' = Private Invite Link Only & No Google Indexing, 'public' = Open to Everyone & Search Engines)
   siteAccessMode?: 'link_only' | 'public';
   siteAccessKey?: string;
+  siteCustomShareUrl?: string;
   updatedAt?: string;
 }
 

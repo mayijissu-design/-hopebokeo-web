@@ -5,13 +5,10 @@ import {
   Link2,
   Copy,
   Check,
-  RefreshCw,
-  ShieldCheck,
   KeyRound,
   Eye,
   EyeOff,
-  ChevronDown,
-  ChevronUp,
+  Save,
 } from 'lucide-react';
 import { HomePoster, Language } from '../types';
 
@@ -39,30 +36,77 @@ function isPreviewDevHost(): boolean {
   );
 }
 
-function extractUrlInviteKey(): string | null {
-  if (typeof window === 'undefined') return null;
+/**
+ * Extracts any token/slug from a custom URL configured by the admin
+ * (e.g. "https://hopebokeo.org/?key=abc" -> "abc", or "https://hopebokeo.org/secret" -> "secret")
+ */
+function extractTokenFromCustomUrl(customUrl?: string): string {
+  if (!customUrl || typeof customUrl !== 'string') return '';
+  const trimmed = customUrl.trim();
+  if (!trimmed) return '';
   try {
-    const searchParams = new URLSearchParams(window.location.search);
-    const fromQuery =
-      searchParams.get('key') ||
-      searchParams.get('invite') ||
-      searchParams.get('access') ||
-      searchParams.get('token');
-    if (fromQuery) return fromQuery.trim();
-
-    const hash = window.location.hash || '';
-    if (hash.includes('?')) {
-      const hashQuery = new URLSearchParams(hash.substring(hash.indexOf('?')));
-      const fromHashQuery =
-        hashQuery.get('key') || hashQuery.get('invite') || hashQuery.get('access');
-      if (fromHashQuery) return fromHashQuery.trim();
+    const parsed = new URL(
+      trimmed.startsWith('http') ? trimmed : `https://hopebokeo.org/${trimmed.replace(/^\/+/, '')}`
+    );
+    const paramVal =
+      parsed.searchParams.get('key') ||
+      parsed.searchParams.get('invite') ||
+      parsed.searchParams.get('access') ||
+      parsed.searchParams.get('token') ||
+      Array.from(parsed.searchParams.values())[0];
+    if (paramVal) return paramVal.trim();
+    if (parsed.hash && parsed.hash.length > 1) {
+      return parsed.hash.replace(/^#+/, '').trim();
     }
-    const match = hash.match(/(?:^|[#&?])(?:key|invite|access)=([^&]+)/i);
-    if (match && match[1]) {
-      return decodeURIComponent(match[1]).trim();
+    const cleanPath = parsed.pathname.replace(/^\/+|\/+$/g, '');
+    if (cleanPath) return cleanPath;
+  } catch {}
+  return trimmed;
+}
+
+function doesCurrentUrlMatchAccess(expectedKey: string, customShareUrl?: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const currentHref = window.location.href.toLowerCase();
+    const searchParams = new URLSearchParams(window.location.search);
+    const candidates: string[] = [];
+
+    searchParams.forEach((val, key) => {
+      if (val) candidates.push(val.trim().toLowerCase());
+      if (key) candidates.push(key.trim().toLowerCase());
+    });
+
+    const hash = (window.location.hash || '').replace(/^#+/, '').trim();
+    if (hash) {
+      candidates.push(hash.toLowerCase());
+      if (hash.includes('=')) {
+        const parts = hash.split('=');
+        if (parts[1]) candidates.push(parts[1].trim().toLowerCase());
+      }
+    }
+
+    const pathSlug = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+    if (pathSlug) {
+      candidates.push(pathSlug);
+    }
+
+    const validTokens = new Set<string>([
+      expectedKey.toLowerCase(),
+      ADMIN_MASTER_PIN.toLowerCase(),
+    ]);
+
+    const customUrlToken = extractTokenFromCustomUrl(customShareUrl);
+    if (customUrlToken) {
+      validTokens.add(customUrlToken.toLowerCase());
+    }
+
+    for (const token of validTokens) {
+      if (!token) continue;
+      if (candidates.includes(token)) return true;
+      if (currentHref.includes(`=${encodeURIComponent(token)}`)) return true;
     }
   } catch {}
-  return null;
+  return false;
 }
 
 function cleanInviteKeyFromUrl(): void {
@@ -115,6 +159,8 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
   const accessMode: 'link_only' | 'public' =
     homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only';
   const expectedKey = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
+  const customShareUrl = (homePoster?.siteCustomShareUrl || '').trim();
+  const customUrlToken = extractTokenFromCustomUrl(customShareUrl);
 
   const [inputKey, setInputKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -129,8 +175,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const [isAuthorized, setIsAuthorized] = useState<boolean>(() => {
     if (isSearchEngineBot()) return false;
-    const urlKey = extractUrlInviteKey();
-    if (urlKey && (urlKey.toLowerCase() === expectedKey.toLowerCase() || urlKey === ADMIN_MASTER_PIN)) {
+    if (doesCurrentUrlMatchAccess(expectedKey, customShareUrl)) {
       try {
         localStorage.setItem(ACCESS_STORAGE_KEY, expectedKey);
         sessionStorage.removeItem(PREVIEW_LOCK_SESSION_KEY);
@@ -140,19 +185,22 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     }
     try {
       const saved = localStorage.getItem(ACCESS_STORAGE_KEY);
-      if (saved && (saved.toLowerCase() === expectedKey.toLowerCase() || saved === ADMIN_MASTER_PIN)) {
+      if (
+        saved &&
+        (saved.toLowerCase() === expectedKey.toLowerCase() ||
+          (customUrlToken && saved.toLowerCase() === customUrlToken.toLowerCase()) ||
+          saved === ADMIN_MASTER_PIN)
+      ) {
         return true;
       }
     } catch {}
     return isPreviewDevHost();
   });
 
-  // Sync dynamic robots meta tag whenever accessMode changes
   useEffect(() => {
     syncRobotsMetaTags(accessMode);
   }, [accessMode]);
 
-  // Listen for custom preview lock events triggered from Admin Settings
   useEffect(() => {
     const handleTriggerPreviewLock = () => {
       try {
@@ -164,14 +212,12 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     return () => window.removeEventListener('hb_preview_lock_screen', handleTriggerPreviewLock);
   }, []);
 
-  // Re-verify if expectedKey changes or URL contains key
   useEffect(() => {
     if (isSearchEngineBot()) {
       setIsAuthorized(false);
       return;
     }
-    const urlKey = extractUrlInviteKey();
-    if (urlKey && (urlKey.toLowerCase() === expectedKey.toLowerCase() || urlKey === ADMIN_MASTER_PIN)) {
+    if (doesCurrentUrlMatchAccess(expectedKey, customShareUrl)) {
       try {
         localStorage.setItem(ACCESS_STORAGE_KEY, expectedKey);
         sessionStorage.removeItem(PREVIEW_LOCK_SESSION_KEY);
@@ -183,7 +229,12 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     }
     try {
       const saved = localStorage.getItem(ACCESS_STORAGE_KEY);
-      if (saved && (saved.toLowerCase() === expectedKey.toLowerCase() || saved === ADMIN_MASTER_PIN)) {
+      if (
+        saved &&
+        (saved.toLowerCase() === expectedKey.toLowerCase() ||
+          (customUrlToken && saved.toLowerCase() === customUrlToken.toLowerCase()) ||
+          saved === ADMIN_MASTER_PIN)
+      ) {
         setIsAuthorized(true);
         return;
       }
@@ -191,14 +242,12 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     if (!isPreviewDevHost()) {
       setIsAuthorized(false);
     }
-  }, [expectedKey]);
+  }, [expectedKey, customShareUrl, customUrlToken]);
 
-  // If mode is public (and admin is not testing the lock screen), render site directly
   if (accessMode === 'public' && !previewLockActive) {
     return <>{children}</>;
   }
 
-  // If visitor is authorized via shared link or code (and not testing the lock screen), render site
   if (isAuthorized && !previewLockActive) {
     return <>{children}</>;
   }
@@ -208,6 +257,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     const cleaned = inputKey.trim();
     if (
       cleaned.toLowerCase() === expectedKey.toLowerCase() ||
+      (customUrlToken && cleaned.toLowerCase() === customUrlToken.toLowerCase()) ||
       cleaned === ADMIN_MASTER_PIN
     ) {
       try {
@@ -220,28 +270,20 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     } else {
       setErrorMsg(
         language === 'lo'
-          ? 'ລະຫັດເຂົ້າເຖິງບໍ່ຖືກຕ້ອງ ກະລຸນາໃຊ້ລິ້ງທີ່ໄດ້ຮັບໂດຍກົງ'
+          ? 'ລະຫັດບໍ່ຖືກຕ້ອງ'
           : language === 'th'
-          ? 'รหัสเข้าถึงไม่ถูกต้อง กรุณาใช้ลิงก์ที่ได้รับโดยตรง'
-          : 'Invalid access key. Please use your direct invite link.'
+          ? 'รหัสไม่ถูกต้อง'
+          : 'Invalid passcode'
       );
     }
   };
 
   return (
     <div className="min-h-screen w-full bg-slate-950 flex flex-col items-center justify-center p-4 select-none relative overflow-hidden">
-      {/* Subtle ambient background */}
-      <div className="absolute -top-32 -left-32 w-96 h-96 bg-red-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-
-      <div className="relative z-10 w-full max-w-md bg-slate-900/95 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-6">
+      <div className="relative z-10 w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-5">
         {previewLockActive && (
-          <div className="bg-amber-500/15 border border-amber-500/40 text-amber-300 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between gap-2">
-            <span>
-              {language === 'lo'
-                ? '👁️ ໂໝດທົດລອງເບິ່ງໜ້າຈໍລັອກ (ຄົນທີ່ຄົ້ນຫາຈາກ Google ຈະເຫັນໜ້ານີ້)'
-                : '👁️ Lock Screen Preview (Visitors from Google see this)'}
-            </span>
+          <div className="bg-amber-500/15 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-between gap-2">
+            <span>{language === 'lo' ? '👁️ ຕົວຢ່າງໜ້າລັອກ' : '👁️ Lock Preview'}</span>
             <button
               type="button"
               onClick={() => {
@@ -251,92 +293,56 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
                 setPreviewLockActive(false);
                 setIsAuthorized(true);
               }}
-              className="px-2.5 py-1 bg-amber-400 text-slate-950 rounded-lg text-[11px] font-black hover:bg-amber-300 cursor-pointer shrink-0"
+              className="px-2.5 py-0.5 bg-amber-400 text-slate-950 rounded-lg text-[11px] font-black hover:bg-amber-300 cursor-pointer"
             >
-              {language === 'lo' ? 'ກັບຄືນ' : 'Exit Preview'}
+              {language === 'lo' ? 'ປິດ' : 'Exit'}
             </button>
           </div>
         )}
 
-        <div className="w-16 h-16 rounded-2xl bg-red-600/15 border border-red-500/30 text-red-500 flex items-center justify-center mx-auto shadow-inner">
-          <Lock className="w-8 h-8" />
+        <div className="w-12 h-12 rounded-xl bg-red-600/15 border border-red-500/30 text-red-500 flex items-center justify-center mx-auto">
+          <Lock className="w-6 h-6" />
         </div>
 
-        <div className="space-y-2">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px] font-black uppercase tracking-wider text-slate-300">
-            <ShieldCheck className="w-3.5 h-3.5 text-red-500" />
-            <span>
-              {language === 'lo'
-                ? 'ເຂົ້າເຖິງສະເພາະຜູ້ທີ່ມີລິ້ງເທົ່ານັ້ນ'
-                : language === 'th'
-                ? 'เข้าถึงเฉพาะผู้ที่มีลิงก์เชิญเท่านั้น'
-                : 'Private Link-Only Access'}
-            </span>
-          </span>
-
-          <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-            {language === 'lo'
-              ? 'ເວັບໄຊນີ້ປິດການເຂົ້າເຖິງສາທາລະນະຊົ່ວຄາວ'
-              : language === 'th'
-              ? 'เว็บไซต์นี้จำกัดการเข้าถึงเฉพาะลิงก์เชิญ'
-              : 'Private Community Portal'}
-          </h1>
-
-          <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
-            {language === 'lo'
-              ? 'ເວັບໄຊນີ້ບໍ່ເປີດໃຫ້ຄົ້ນຫາຜ່ານ Google ທົ່ວໄປ. ກະລຸນາເຂົ້າເວັບໄຊຜ່ານລິ້ງເຊີນ (Invite Link) ທີ່ທ່ານໄດ້ຮັບໂດຍກົງ ຫຼື ປ້ອນລະຫັດເຂົ້າເຖິງດ້ານລຸ່ມ.'
-              : language === 'th'
-              ? 'เว็บไซต์นี้ไม่เปิดให้ค้นหาทั่วไป กรุณาเข้าผ่านลิงก์เชิญที่คุณได้รับโดยตรง หรือป้อนรหัสเข้าถึงด้านล่าง'
-              : 'This portal is not open to public search engines. Please open the direct invite link sent to you, or enter your access key below.'}
-          </p>
-        </div>
+        <h1 className="text-lg font-black text-white">
+          {language === 'lo'
+            ? 'ກະລຸນາປ້ອນລະຫັດເຂົ້າເວັບໄຊ'
+            : language === 'th'
+            ? 'กรุณาป้อนรหัสเข้าเว็บไซต์'
+            : 'Enter Access Passcode'}
+        </h1>
 
         <form onSubmit={handleUnlockSubmit} className="space-y-3 text-left">
-          <div>
-            <label className="block text-xs font-bold text-slate-300 mb-1.5">
-              {language === 'lo'
-                ? 'ປ້ອນລະຫັດລິ້ງເຊີນ (Access Key) ຫຼື ລະຫັດຜູ້ດູແລ:'
-                : 'Enter Invite Key or Admin Passcode:'}
-            </label>
-            <div className="relative">
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={inputKey}
-                onChange={(e) => {
-                  setInputKey(e.target.value);
-                  if (errorMsg) setErrorMsg('');
-                }}
-                placeholder={language === 'lo' ? 'ປ້ອນລະຫັດເຂົ້າເຖິງ...' : 'Enter access key...'}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-red-500 rounded-xl px-4 py-3 pr-10 text-sm font-mono font-bold text-white placeholder-slate-500 outline-none transition"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-3 text-slate-400 hover:text-white cursor-pointer"
-              >
-                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
+          <div className="relative">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={inputKey}
+              onChange={(e) => {
+                setInputKey(e.target.value);
+                if (errorMsg) setErrorMsg('');
+              }}
+              placeholder={language === 'lo' ? 'ລະຫັດເຂົ້າເວັບໄຊ...' : 'Passcode...'}
+              className="w-full bg-slate-950 border border-slate-700 focus:border-red-500 rounded-xl px-3.5 py-2.5 pr-10 text-sm font-mono font-bold text-white placeholder-slate-500 outline-none transition"
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey(!showKey)}
+              className="absolute right-3 top-2.5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
           </div>
 
           {errorMsg && (
-            <p className="text-xs font-bold text-red-400 text-center bg-red-950/50 border border-red-800/60 py-2 px-3 rounded-xl">
-              {errorMsg}
-            </p>
+            <p className="text-xs font-bold text-red-400 text-center">{errorMsg}</p>
           )}
 
           <button
             type="submit"
-            className="w-full py-3 bg-[#cc0000] hover:bg-red-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-lg transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+            className="w-full py-2.5 bg-[#cc0000] hover:bg-red-700 text-white font-black text-xs rounded-xl shadow transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <KeyRound className="w-4 h-4" />
-            <span>
-              {language === 'lo'
-                ? 'ຢືນຢັນເພື່ອເຂົ້າສູ່ເວັບໄຊ'
-                : language === 'th'
-                ? 'ยืนยันเพื่อเข้าสู่เว็บไซต์'
-                : 'Enter Website'}
-            </span>
+            <span>{language === 'lo' ? 'ເຂົ້າສູ່ເວັບໄຊ' : 'Unlock'}</span>
           </button>
         </form>
       </div>
@@ -357,19 +363,9 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
 }) => {
   const currentMode: 'link_only' | 'public' =
     homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only';
-  const currentKey = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
+  const isPrivate = currentMode === 'link_only';
 
-  const [customKey, setCustomKey] = useState(currentKey);
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [isSavingMode, setIsSavingMode] = useState(false);
-  const [savedNotice, setSavedNotice] = useState('');
-  const [isExpanded, setIsExpanded] = useState(true);
-
-  useEffect(() => {
-    setCustomKey((homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim());
-  }, [homePoster?.siteAccessKey]);
-
-  const productionOrigin =
+  const defaultOrigin =
     typeof window !== 'undefined' &&
     window.location.hostname &&
     !window.location.hostname.includes('run.app') &&
@@ -377,295 +373,176 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
       ? window.location.origin
       : 'https://hopebokeo.org';
 
-  const shareableLink = `${productionOrigin}/?key=${encodeURIComponent(
-    customKey.trim() || DEFAULT_SITE_ACCESS_KEY
-  )}`;
+  const savedKey = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
+  const savedCustomUrl =
+    (homePoster?.siteCustomShareUrl || '').trim() ||
+    `${defaultOrigin}/?key=${savedKey}`;
 
-  const handleSwitchMode = async (newMode: 'link_only' | 'public', keyToSave?: string) => {
+  const [customKey, setCustomKey] = useState(savedKey);
+  const [customUrl, setCustomUrl] = useState(savedCustomUrl);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedToast, setSavedToast] = useState(false);
+
+  useEffect(() => {
+    const k = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
+    setCustomKey(k);
+    setCustomUrl(
+      (homePoster?.siteCustomShareUrl || '').trim() || `${defaultOrigin}/?key=${k}`
+    );
+  }, [homePoster?.siteAccessKey, homePoster?.siteCustomShareUrl, defaultOrigin]);
+
+  const handleSave = async (
+    nextMode: 'link_only' | 'public',
+    nextKeyInput?: string,
+    nextUrlInput?: string
+  ) => {
     if (!onSaveHomePoster || !homePoster) return;
-    setIsSavingMode(true);
-    const finalKey = (keyToSave ?? customKey).trim() || DEFAULT_SITE_ACCESS_KEY;
+    setIsSaving(true);
+    const cleanKey = (nextKeyInput ?? customKey).trim() || DEFAULT_SITE_ACCESS_KEY;
+    const cleanUrl =
+      (nextUrlInput ?? customUrl).trim() || `${defaultOrigin}/?key=${cleanKey}`;
+
     try {
-      localStorage.setItem(ACCESS_STORAGE_KEY, finalKey);
-      syncRobotsMetaTags(newMode);
+      localStorage.setItem(ACCESS_STORAGE_KEY, cleanKey);
+      syncRobotsMetaTags(nextMode);
       await onSaveHomePoster({
         ...homePoster,
-        siteAccessMode: newMode,
-        siteAccessKey: finalKey,
+        siteAccessMode: nextMode,
+        siteAccessKey: cleanKey,
+        siteCustomShareUrl: cleanUrl,
         updatedAt: new Date().toISOString(),
       });
-      setSavedNotice(
-        newMode === 'link_only'
-          ? language === 'lo'
-            ? '✓ ປ່ຽນເປັນໂໝດສ່ວນຕົວ (ເຂົ້າໄດ້ສະເພາະຜູ້ທີ່ມີລິ້ງເທົ່ານັ້ນ) ແລ້ວ!'
-            : '✓ Switched to Private Link-Only Mode!'
-          : language === 'lo'
-          ? '✓ ປ່ຽນເປັນໂໝດສາທາລະນະ (ເປີດໃຫ້ທຸກຄົນເຂົ້າເບິ່ງໄດ້) ແລ້ວ!'
-          : '✓ Switched to Public Mode!'
-      );
-      setTimeout(() => setSavedNotice(''), 3500);
+      setSavedToast(true);
+      setTimeout(() => setSavedToast(false), 2000);
     } finally {
-      setIsSavingMode(false);
+      setIsSaving(false);
     }
   };
 
-  const handleCopyShareLink = () => {
-    navigator.clipboard?.writeText(shareableLink).catch(() => {});
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
+  const handleKeyChange = (val: string) => {
+    setCustomKey(val);
+    // Automatically update the ?key= part of the URL if the URL uses ?key=
+    if (customUrl.includes('?key=')) {
+      const base = customUrl.split('?key=')[0];
+      setCustomUrl(`${base}?key=${val}`);
+    }
   };
 
-  const handleGenerateNewKey = () => {
-    const randomPart = Math.random().toString(36).substring(2, 7);
-    const nextKey = `hb-${randomPart}`;
-    setCustomKey(nextKey);
-    handleSwitchMode(currentMode, nextKey);
+  const handleCopyLink = () => {
+    navigator.clipboard?.writeText(customUrl.trim()).catch(() => {});
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-      {/* Header Bar */}
-      <div
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="p-4 sm:px-5 flex flex-wrap items-center justify-between gap-3 cursor-pointer bg-slate-50/80 dark:bg-slate-800/80 hover:bg-slate-100/70 dark:hover:bg-slate-700/50 transition"
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-xs ${
-              currentMode === 'link_only'
-                ? 'bg-red-600 text-white'
-                : 'bg-emerald-600 text-white'
+    <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-3 sm:px-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      {/* Left: Simple ON/OFF Toggle Button (Private vs Public) */}
+      <div className="flex items-center gap-2.5 shrink-0">
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={() => handleSave(isPrivate ? 'public' : 'link_only')}
+          className={`relative inline-flex items-center h-8 rounded-full p-1 transition-colors cursor-pointer border ${
+            isPrivate
+              ? 'bg-[#cc0000] border-red-700 text-white'
+              : 'bg-emerald-600 border-emerald-700 text-white'
+          }`}
+        >
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black transition-all ${
+              isPrivate ? 'bg-white text-[#cc0000] shadow-xs' : 'text-white/90'
             }`}
           >
-            {currentMode === 'link_only' ? (
-              <Lock className="w-5 h-5" />
-            ) : (
-              <Globe className="w-5 h-5" />
-            )}
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
-                {language === 'lo'
-                  ? 'ການຄວບຄຸມການຄົ້ນຫາ Google & ການເຂົ້າເຖິງເວັບໄຊ'
-                  : 'Website Visibility & Link-Only Access Control'}
-              </h3>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-black uppercase ${
-                  currentMode === 'link_only'
-                    ? 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300 border border-red-300 dark:border-red-800'
-                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
-                }`}
-              >
-                {currentMode === 'link_only'
-                  ? language === 'lo'
-                    ? '🔒 ໂໝດສ່ວນຕົວ (ສົ່ງລິ້ງເທົ່ານັ້ນ)'
-                    : '🔒 Private (Link Only)'
-                  : language === 'lo'
-                  ? '🌐 ໂໝດສາທາລະນະ (ເປີດທົ່ວໄປ)'
-                  : '🌐 Public Mode'}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {currentMode === 'link_only'
-                ? language === 'lo'
-                  ? 'ປິດກັ້ນຈາກ Google Search ແລ້ວ — ຄົນທົ່ວໄປຈະເຂົ້າເວັບໄຊບໍ່ໄດ້ ຍົກເວັ້ນທ່ານສົ່ງລິ້ງເຊີນໃຫ້ໂດຍກົງ'
-                  : 'Hidden from Google Search — Only people with your direct invite link can view the website'
-                : language === 'lo'
-                ? 'ເປີດສາທາລະນະ — ທຸກຄົນສາມາດເຂົ້າເບິ່ງເວັບໄຊ ແລະ ຄົ້ນຫາເຫັນໃນ Google ໄດ້ຕາມປົກກະຕິ'
-                : 'Publicly accessible — Anyone can visit and find the website on Google Search'}
-            </p>
-          </div>
-        </div>
+            <Lock className="w-3.5 h-3.5" />
+            <span>{language === 'lo' ? 'ສ່ວນຕົວ' : 'Private'}</span>
+          </span>
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black transition-all ${
+              !isPrivate ? 'bg-white text-emerald-700 shadow-xs' : 'text-white/90'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>{language === 'lo' ? 'ສາທາລະນະ' : 'Public'}</span>
+          </span>
+        </button>
 
         <button
           type="button"
-          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700"
+          onClick={() => window.dispatchEvent(new CustomEvent('hb_preview_lock_screen'))}
+          className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200 transition cursor-pointer"
+          title={language === 'lo' ? 'ເບິ່ງໜ້າລັອກ' : 'Preview Lock Screen'}
         >
-          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          <Eye className="w-4 h-4" />
         </button>
       </div>
 
-      {isExpanded && (
-        <div className="p-4 sm:p-5 border-t border-slate-200 dark:border-slate-700 space-y-4">
-          {/* 2-Mode Switch Buttons */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Mode 1: Private Link-Only Mode */}
-            <button
-              type="button"
-              disabled={isSavingMode}
-              onClick={() => handleSwitchMode('link_only')}
-              className={`p-3.5 rounded-xl border-2 text-left transition flex items-start gap-3 cursor-pointer ${
-                currentMode === 'link_only'
-                  ? 'border-[#cc0000] bg-red-50/70 dark:bg-red-950/30 ring-2 ring-red-500/20'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 bg-white dark:bg-slate-900'
-              }`}
-            >
-              <div
-                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-                  currentMode === 'link_only'
-                    ? 'bg-[#cc0000] text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                }`}
-              >
-                <Lock className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                    {language === 'lo'
-                      ? '🔒 1. ໂໝດສ່ວນຕົວ (ເຂົ້າຜ່ານລິ້ງເທົ່ານັ້ນ)'
-                      : '🔒 1. Private Link-Only Mode'}
-                  </span>
-                  {currentMode === 'link_only' && (
-                    <span className="text-[10px] font-black bg-[#cc0000] text-white px-2 py-0.5 rounded-full">
-                      {language === 'lo' ? 'ກຳລັງໃຊ້ງານ' : 'ACTIVE'}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
-                  {language === 'lo'
-                    ? 'ບລັອກ Google ບໍ່ໃຫ້ເກັບຂໍ້ມູນ ແລະ ລັອກໜ້າເວັບໄວ້. ຜູ້ທີ່ຈະເຂົ້າເບິ່ງໄດ້ຕ້ອງກົດຜ່ານລິ້ງທີ່ທ່ານສົ່ງໃຫ້ເທົ່ານັ້ນ.'
-                    : 'Blocks Google indexing & locks the site. Visitors can only enter via the invite link you send them.'}
-                </p>
-              </div>
-            </button>
-
-            {/* Mode 2: Public Mode */}
-            <button
-              type="button"
-              disabled={isSavingMode}
-              onClick={() => handleSwitchMode('public')}
-              className={`p-3.5 rounded-xl border-2 text-left transition flex items-start gap-3 cursor-pointer ${
-                currentMode === 'public'
-                  ? 'border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/30 ring-2 ring-emerald-500/20'
-                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 bg-white dark:bg-slate-900'
-              }`}
-            >
-              <div
-                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-                  currentMode === 'public'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                }`}
-              >
-                <Globe className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                    {language === 'lo'
-                      ? '🌐 2. ໂໝດສາທາລະນະ (ເປີດໃຫ້ທຸກຄົນເຂົ້າໄດ້)'
-                      : '🌐 2. Public Mode (Open to All)'}
-                  </span>
-                  {currentMode === 'public' && (
-                    <span className="text-[10px] font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full">
-                      {language === 'lo' ? 'ກຳລັງໃຊ້ງານ' : 'ACTIVE'}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
-                  {language === 'lo'
-                    ? 'ເມື່ອຕ້ອງການເປີດສາທາລະນະໃນອະນາຄົດ ພຽງກົດປຸ່ມນີ້ ທຸກຄົນກໍຈະເຂົ້າເວັບ ແລະ ຄົ້ນຫາໃນ Google ໄດ້ທັນທີ.'
-                    : 'When you are ready to go public in the future, click here so everyone and Google can access the site.'}
-                </p>
-              </div>
-            </button>
-          </div>
-
-          {savedNotice && (
-            <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-bold text-center">
-              {savedNotice}
-            </div>
-          )}
-
-          {/* Shareable Link Box (Always shown so Admin can copy or customize the link) */}
-          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-700 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-black text-slate-800 dark:text-slate-200">
-                <Link2 className="w-4 h-4 text-[#cc0000]" />
-                <span>
-                  {language === 'lo'
-                    ? 'ລິ້ງສຳລັບກ໊ອບປີ້ສົ່ງໃຫ້ໝູ່ ຫຼື ທີມງານ (Shareable Invite Link):'
-                    : 'Shareable Invite Link (Send this link to allow access):'}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => window.dispatchEvent(new CustomEvent('hb_preview_lock_screen'))}
-                  className="px-2.5 py-1 rounded-lg bg-slate-200/80 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                >
-                  <Eye className="w-3.5 h-3.5 text-amber-500" />
-                  <span>
-                    {language === 'lo' ? 'ເບິ່ງໜ້າຈໍລັອກ' : 'Preview Lock Screen'}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleGenerateNewKey}
-                  className="px-2.5 py-1 rounded-lg bg-slate-200/80 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
-                  title={
-                    language === 'lo'
-                      ? 'ປ່ຽນລະຫັດລິ້ງໃໝ່ (ລິ້ງເກົ່າຈະໃຊ້ບໍ່ໄດ້ທັນທີ)'
-                      : 'Generate a new link key (invalidates old links)'
-                  }
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>{language === 'lo' ? 'ປ່ຽນລິ້ງໃໝ່' : 'New Link'}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-stretch gap-2">
-              <div className="flex-1 flex items-center bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-slate-800 dark:text-slate-200 select-all overflow-x-auto">
-                {shareableLink}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleCopyShareLink}
-                className="px-4 py-2 rounded-xl bg-[#cc0000] hover:bg-red-700 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer shrink-0 active:scale-95"
-              >
-                {copiedLink ? (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>{language === 'lo' ? 'ກ໊ອບປີ້ລິ້ງແລ້ວ!' : 'Copied!'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>{language === 'lo' ? 'ກ໊ອບປີ້ລິ້ງສົ່ງໃຫ້ໝູ່' : 'Copy Invite Link'}</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                {language === 'lo' ? 'ຫຼື ຕັ້ງລະຫັດລິ້ງເອງ:' : 'Custom Access Key:'}
-              </span>
-              <input
-                type="text"
-                value={customKey}
-                onChange={(e) => setCustomKey(e.target.value.replace(/\s+/g, ''))}
-                className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 w-32 outline-none focus:border-[#cc0000]"
-              />
-              {customKey.trim() !== currentKey && (
-                <button
-                  type="button"
-                  onClick={() => handleSwitchMode(currentMode, customKey)}
-                  className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black cursor-pointer"
-                >
-                  {language === 'lo' ? 'ບັນທຶກລະຫັດລິ້ງ' : 'Save Key'}
-                </button>
-              )}
-            </div>
-          </div>
+      {/* Right: Custom Link Input + Custom Passcode Input + Copy & Save Buttons */}
+      <div className="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center gap-2">
+        {/* Editable Custom Link */}
+        <div className="relative flex-1 min-w-0">
+          <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={customUrl}
+            onChange={(e) => setCustomUrl(e.target.value)}
+            placeholder={language === 'lo' ? 'ຕັ້ງລິ້ງເອງ...' : 'Custom link...'}
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 outline-none focus:border-[#cc0000]"
+          />
         </div>
-      )}
+
+        {/* Editable Custom Passcode / Key */}
+        <div className="relative sm:w-40 shrink-0">
+          <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={customKey}
+            onChange={(e) => handleKeyChange(e.target.value)}
+            placeholder={language === 'lo' ? 'ຕັ້ງລະຫັດເອງ...' : 'Custom key...'}
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-800 dark:text-slate-100 outline-none focus:border-[#cc0000]"
+          />
+        </div>
+
+        {/* Save & Copy Buttons */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => handleSave(currentMode, customKey, customUrl)}
+            className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition active:scale-95"
+          >
+            {savedToast ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{language === 'lo' ? 'ບັນທຶກແລ້ວ' : 'Saved'}</span>
+              </>
+            ) : (
+              <>
+                <Save className="w-3.5 h-3.5" />
+                <span>{language === 'lo' ? 'ບັນທຶກ' : 'Save'}</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCopyLink}
+            className="px-3 py-1.5 rounded-lg bg-[#cc0000] hover:bg-red-700 text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition active:scale-95"
+          >
+            {copiedLink ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>{language === 'lo' ? 'ກ໊ອບປີ້ແລ້ວ' : 'Copied'}</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                <span>{language === 'lo' ? 'ກ໊ອບປີ້ລິ້ງ' : 'Copy'}</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
