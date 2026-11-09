@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Lock,
   Globe,
@@ -13,8 +13,16 @@ import {
 import { HomePoster, Language } from '../types';
 
 const ACCESS_SESSION_KEY = 'hb_site_session_unlocked_key';
-const ADMIN_MASTER_PIN = '76838584';
+const SITE_ACCESS_CONFIG_STORAGE_KEY = 'hb_site_access_config';
+const SITE_ACCESS_COOKIE_NAME = 'hb_site_access_cfg';
 export const DEFAULT_SITE_ACCESS_KEY = 'hb2026';
+
+export interface StoredSiteAccessConfig {
+  siteAccessMode: 'link_only' | 'public';
+  siteAccessKey: string;
+  siteCustomShareUrl: string;
+  updatedAt: string;
+}
 
 const RESERVED_TAB_NAMES = new Set([
   '',
@@ -35,73 +43,186 @@ function isSearchEngineBot(): boolean {
   );
 }
 
-/**
- * Extracts a custom secret token or slug from a user-defined share URL.
- */
-function extractTokenFromCustomUrl(customUrl?: string): string {
-  if (!customUrl || typeof customUrl !== 'string') return '';
-  const trimmed = customUrl.trim();
-  if (!trimmed) return '';
+function readCookieConfig(): StoredSiteAccessConfig | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const match = document.cookie
+      .split('; ')
+      .find((row) => row.startsWith(`${SITE_ACCESS_COOKIE_NAME}=`));
+    if (!match) return null;
+    const raw = decodeURIComponent(match.split('=').slice(1).join('='));
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.siteAccessKey === 'string' && parsed.siteAccessKey.trim()) {
+      return {
+        siteAccessMode: parsed.siteAccessMode === 'public' ? 'public' : 'link_only',
+        siteAccessKey: parsed.siteAccessKey.trim(),
+        siteCustomShareUrl: typeof parsed.siteCustomShareUrl === 'string' ? parsed.siteCustomShareUrl.trim() : '',
+        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+      };
+    }
+  } catch {}
+  return null;
+}
+
+export function getStoredSiteAccessConfig(): StoredSiteAccessConfig | null {
+  let localCfg: StoredSiteAccessConfig | null = null;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(SITE_ACCESS_CONFIG_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.siteAccessKey === 'string' && parsed.siteAccessKey.trim()) {
+          localCfg = {
+            siteAccessMode: parsed.siteAccessMode === 'public' ? 'public' : 'link_only',
+            siteAccessKey: parsed.siteAccessKey.trim(),
+            siteCustomShareUrl:
+              typeof parsed.siteCustomShareUrl === 'string' ? parsed.siteCustomShareUrl.trim() : '',
+            updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+          };
+        }
+      }
+    } catch {}
+  }
+
+  const cookieCfg = readCookieConfig();
+  if (localCfg && cookieCfg) {
+    const lTime = Date.parse(localCfg.updatedAt || '') || 0;
+    const cTime = Date.parse(cookieCfg.updatedAt || '') || 0;
+    return cTime > lTime ? cookieCfg : localCfg;
+  }
+  return localCfg || cookieCfg;
+}
+
+export function saveStoredSiteAccessConfig(config: StoredSiteAccessConfig): void {
+  const clean: StoredSiteAccessConfig = {
+    siteAccessMode: config.siteAccessMode === 'public' ? 'public' : 'link_only',
+    siteAccessKey: (config.siteAccessKey || '').trim() || DEFAULT_SITE_ACCESS_KEY,
+    siteCustomShareUrl: (config.siteCustomShareUrl || '').trim(),
+    updatedAt: config.updatedAt || new Date().toISOString(),
+  };
+
+  if (typeof document !== 'undefined') {
+    try {
+      const encoded = encodeURIComponent(JSON.stringify(clean));
+      document.cookie = `${SITE_ACCESS_COOKIE_NAME}=${encoded}; path=/; max-age=31536000; SameSite=Lax`;
+    } catch {}
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(SITE_ACCESS_CONFIG_STORAGE_KEY, JSON.stringify(clean));
+    } catch {
+      try {
+        localStorage.removeItem('hb_cached_events');
+        localStorage.setItem(SITE_ACCESS_CONFIG_STORAGE_KEY, JSON.stringify(clean));
+      } catch {}
+    }
+
+    try {
+      const cachedPosterRaw = localStorage.getItem('hb_cached_home_poster');
+      if (cachedPosterRaw) {
+        const parsedPoster = JSON.parse(cachedPosterRaw);
+        if (parsedPoster && typeof parsedPoster === 'object') {
+          const updatedPoster = {
+            ...parsedPoster,
+            siteAccessMode: clean.siteAccessMode,
+            siteAccessKey: clean.siteAccessKey,
+            siteCustomShareUrl: clean.siteCustomShareUrl,
+            updatedAt: clean.updatedAt,
+          };
+          localStorage.setItem('hb_cached_home_poster', JSON.stringify(updatedPoster));
+        }
+      }
+    } catch {}
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hb_site_access_updated', { detail: clean }));
+  }
+}
+
+export function resolveEffectiveSiteAccessConfig(homePoster?: HomePoster): StoredSiteAccessConfig {
+  const stored = getStoredSiteAccessConfig();
+  const posterHasKey = Boolean(
+    homePoster?.siteAccessKey && typeof homePoster.siteAccessKey === 'string' && homePoster.siteAccessKey.trim()
+  );
+
+  if (stored && posterHasKey) {
+    const sTime = Date.parse(stored.updatedAt || '') || 0;
+    const pTime = Date.parse(homePoster?.updatedAt || '') || 0;
+    if (sTime >= pTime) {
+      return stored;
+    }
+    return {
+      siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
+      siteAccessKey: homePoster!.siteAccessKey!.trim(),
+      siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim() || stored.siteCustomShareUrl,
+      updatedAt: homePoster?.updatedAt || stored.updatedAt,
+    };
+  }
+
+  if (stored) {
+    return stored;
+  }
+
+  if (posterHasKey) {
+    return {
+      siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
+      siteAccessKey: homePoster!.siteAccessKey!.trim(),
+      siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim(),
+      updatedAt: homePoster?.updatedAt || '',
+    };
+  }
+
+  return {
+    siteAccessMode: homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only',
+    siteAccessKey: DEFAULT_SITE_ACCESS_KEY,
+    siteCustomShareUrl: (homePoster?.siteCustomShareUrl || '').trim(),
+    updatedAt: homePoster?.updatedAt || '',
+  };
+}
+
+function buildShareUrlWithKey(baseUrlInput: string, keyInput: string, defaultOrigin: string): string {
+  const cleanKey = keyInput.trim() || DEFAULT_SITE_ACCESS_KEY;
+  const trimmedUrl = (baseUrlInput || '').trim();
+  if (!trimmedUrl) {
+    return `${defaultOrigin}/?key=${encodeURIComponent(cleanKey)}`;
+  }
   try {
     const parsed = new URL(
-      trimmed.startsWith('http')
-        ? trimmed
-        : `https://hopebokeo.org/${trimmed.replace(/^\/+/, '')}`
+      trimmedUrl.startsWith('http')
+        ? trimmedUrl
+        : `${defaultOrigin}/${trimmedUrl.replace(/^\/+/, '')}`
     );
-    const paramVal =
-      parsed.searchParams.get('key') ||
-      parsed.searchParams.get('invite') ||
-      parsed.searchParams.get('access') ||
-      parsed.searchParams.get('token') ||
-      Array.from(parsed.searchParams.values())[0];
-    if (paramVal && !RESERVED_TAB_NAMES.has(paramVal.trim().toLowerCase())) {
-      return paramVal.trim();
-    }
-    if (parsed.hash && parsed.hash.length > 1) {
-      const cleanHash = parsed.hash.replace(/^#+/, '').trim();
-      if (cleanHash.includes('=')) {
-        const val = cleanHash.split('=')[1]?.trim() || '';
-        if (val && !RESERVED_TAB_NAMES.has(val.toLowerCase())) return val;
-      } else if (!RESERVED_TAB_NAMES.has(cleanHash.toLowerCase())) {
-        return cleanHash;
-      }
-    }
-    const cleanPath = parsed.pathname.replace(/^\/+|\/+$/g, '').trim();
-    if (cleanPath && !RESERVED_TAB_NAMES.has(cleanPath.toLowerCase())) {
-      return cleanPath;
-    }
-    return '';
+    parsed.searchParams.set('key', cleanKey);
+    return parsed.toString();
   } catch {
-    return !RESERVED_TAB_NAMES.has(trimmed.toLowerCase()) ? trimmed : '';
+    const base = trimmedUrl.split('?')[0] || defaultOrigin;
+    return `${base}?key=${encodeURIComponent(cleanKey)}`;
   }
 }
 
 /**
- * Checks if the current browser URL explicitly contains the secret invite link parameter/slug.
+ * Checks if the current browser URL contains the exact secret passcode (`expectedKey`) in its query/hash/path.
  */
-function doesCurrentUrlContainSecretLink(
-  expectedKey: string,
-  customShareUrl?: string
-): boolean {
+function doesCurrentUrlContainSecretLink(expectedKey: string): boolean {
   if (typeof window === 'undefined') return false;
+  const target = expectedKey.trim();
+  if (!target) return false;
+  const targetLower = target.toLowerCase();
+
   try {
-    const validTokens = new Set<string>();
-    if (expectedKey.trim()) {
-      validTokens.add(expectedKey.trim().toLowerCase());
-    }
-    const customToken = extractTokenFromCustomUrl(customShareUrl);
-    if (customToken) {
-      validTokens.add(customToken.toLowerCase());
-    }
-
-    if (validTokens.size === 0) return false;
-
     // 1. Check query parameters (?key=..., ?invite=..., etc.)
     const searchParams = new URLSearchParams(window.location.search);
     for (const [k, v] of searchParams.entries()) {
-      const cleanV = v.trim().toLowerCase();
-      const cleanK = k.trim().toLowerCase();
-      if (validTokens.has(cleanV) || validTokens.has(cleanK)) {
+      const cleanV = v.trim();
+      const cleanK = k.trim();
+      if (
+        cleanV === target ||
+        cleanV.toLowerCase() === targetLower ||
+        cleanK === target ||
+        cleanK.toLowerCase() === targetLower
+      ) {
         return true;
       }
     }
@@ -114,18 +235,22 @@ function doesCurrentUrlContainSecretLink(
           rawHash.includes('?') ? rawHash.substring(rawHash.indexOf('?')) : rawHash
         );
         for (const [, v] of hashParams.entries()) {
-          if (validTokens.has(v.trim().toLowerCase())) {
+          if (v.trim() === target || v.trim().toLowerCase() === targetLower) {
             return true;
           }
         }
-      } else if (validTokens.has(rawHash.toLowerCase())) {
+      } else if (rawHash === target || rawHash.toLowerCase() === targetLower) {
         return true;
       }
     }
 
-    // 3. Check custom path slug (e.g. /my-secret-link)
-    const pathSlug = window.location.pathname.replace(/^\/+|\/+$/g, '').trim().toLowerCase();
-    if (pathSlug && !RESERVED_TAB_NAMES.has(pathSlug) && validTokens.has(pathSlug)) {
+    // 3. Check custom path slug
+    const pathSlug = decodeURIComponent(window.location.pathname.replace(/^\/+|\/+$/g, '').trim());
+    if (
+      pathSlug &&
+      !RESERVED_TAB_NAMES.has(pathSlug.toLowerCase()) &&
+      (pathSlug === target || pathSlug.toLowerCase() === targetLower)
+    ) {
       return true;
     }
   } catch {}
@@ -168,6 +293,13 @@ function syncRobotsMetaTags(mode: 'link_only' | 'public'): void {
   });
 }
 
+function doesPasscodeStrictlyMatch(input: string, expectedKey: string): boolean {
+  const cleanInput = (input || '').trim();
+  const cleanExpected = (expectedKey || '').trim();
+  if (!cleanInput || !cleanExpected) return false;
+  return cleanInput === cleanExpected;
+}
+
 interface SiteAccessGateProps {
   homePoster?: HomePoster;
   language: Language;
@@ -179,11 +311,30 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
   language,
   children,
 }) => {
-  const accessMode: 'link_only' | 'public' =
-    homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only';
-  const expectedKey = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
-  const customShareUrl = (homePoster?.siteCustomShareUrl || '').trim();
-  const customUrlToken = extractTokenFromCustomUrl(customShareUrl);
+  const [effectiveConfig, setEffectiveConfig] = useState<StoredSiteAccessConfig>(() =>
+    resolveEffectiveSiteAccessConfig(homePoster)
+  );
+
+  useEffect(() => {
+    const next = resolveEffectiveSiteAccessConfig(homePoster);
+    setEffectiveConfig(next);
+  }, [homePoster?.siteAccessMode, homePoster?.siteAccessKey, homePoster?.siteCustomShareUrl, homePoster?.updatedAt]);
+
+  useEffect(() => {
+    const handleConfigUpdated = (e: Event) => {
+      const detail = (e as CustomEvent<StoredSiteAccessConfig>).detail;
+      if (detail && detail.siteAccessKey) {
+        setEffectiveConfig(detail);
+      } else {
+        setEffectiveConfig(resolveEffectiveSiteAccessConfig(homePoster));
+      }
+    };
+    window.addEventListener('hb_site_access_updated', handleConfigUpdated);
+    return () => window.removeEventListener('hb_site_access_updated', handleConfigUpdated);
+  }, [homePoster]);
+
+  const accessMode = effectiveConfig.siteAccessMode;
+  const expectedKey = (effectiveConfig.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
 
   const [inputKey, setInputKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -198,7 +349,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const [isAuthorized, setIsAuthorized] = useState<boolean>(() => {
     if (isSearchEngineBot()) return false;
-    if (doesCurrentUrlContainSecretLink(expectedKey, customShareUrl)) {
+    if (doesCurrentUrlContainSecretLink(expectedKey)) {
       try {
         sessionStorage.setItem(ACCESS_SESSION_KEY, expectedKey);
       } catch {}
@@ -207,12 +358,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     }
     try {
       const saved = sessionStorage.getItem(ACCESS_SESSION_KEY);
-      if (
-        saved &&
-        (saved.toLowerCase() === expectedKey.toLowerCase() ||
-          (customUrlToken && saved.toLowerCase() === customUrlToken.toLowerCase()) ||
-          saved === ADMIN_MASTER_PIN)
-      ) {
+      if (saved && doesPasscodeStrictlyMatch(saved, expectedKey)) {
         return true;
       }
     } catch {}
@@ -229,6 +375,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
         sessionStorage.removeItem(ACCESS_SESSION_KEY);
       } catch {}
       setInputKey('');
+      setErrorMsg('');
       setIsAuthorized(false);
     };
     window.addEventListener('hb_preview_lock_screen', handleLockNow);
@@ -240,7 +387,7 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
       setIsAuthorized(false);
       return;
     }
-    if (doesCurrentUrlContainSecretLink(expectedKey, customShareUrl)) {
+    if (doesCurrentUrlContainSecretLink(expectedKey)) {
       try {
         sessionStorage.setItem(ACCESS_SESSION_KEY, expectedKey);
       } catch {}
@@ -250,18 +397,13 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
     }
     try {
       const saved = sessionStorage.getItem(ACCESS_SESSION_KEY);
-      if (
-        saved &&
-        (saved.toLowerCase() === expectedKey.toLowerCase() ||
-          (customUrlToken && saved.toLowerCase() === customUrlToken.toLowerCase()) ||
-          saved === ADMIN_MASTER_PIN)
-      ) {
+      if (saved && doesPasscodeStrictlyMatch(saved, expectedKey)) {
         setIsAuthorized(true);
         return;
       }
     } catch {}
     setIsAuthorized(false);
-  }, [expectedKey, customShareUrl, customUrlToken]);
+  }, [expectedKey]);
 
   if (accessMode === 'public') {
     return <>{children}</>;
@@ -273,14 +415,13 @@ export const SiteAccessGate: React.FC<SiteAccessGateProps> = ({
 
   const handleUnlockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleaned = inputKey.trim();
-    if (
-      cleaned.toLowerCase() === expectedKey.toLowerCase() ||
-      (customUrlToken && cleaned.toLowerCase() === customUrlToken.toLowerCase()) ||
-      cleaned === ADMIN_MASTER_PIN
-    ) {
+    // Always re-read latest config on submit in case it was just updated
+    const latestConfig = resolveEffectiveSiteAccessConfig(homePoster);
+    const activeExpectedKey = (latestConfig.siteAccessKey || expectedKey || DEFAULT_SITE_ACCESS_KEY).trim();
+
+    if (doesPasscodeStrictlyMatch(inputKey, activeExpectedKey)) {
       try {
-        sessionStorage.setItem(ACCESS_SESSION_KEY, expectedKey);
+        sessionStorage.setItem(ACCESS_SESSION_KEY, activeExpectedKey);
       } catch {}
       setIsAuthorized(true);
       setErrorMsg('');
@@ -367,10 +508,6 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
   onSaveHomePoster,
   language,
 }) => {
-  const currentMode: 'link_only' | 'public' =
-    homePoster?.siteAccessMode === 'public' ? 'public' : 'link_only';
-  const isPrivate = currentMode === 'link_only';
-
   const defaultOrigin =
     typeof window !== 'undefined' &&
     window.location.hostname &&
@@ -379,67 +516,180 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
       ? window.location.origin
       : 'https://hopebokeo.org';
 
-  const savedKey = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
-  const savedCustomUrl =
-    (homePoster?.siteCustomShareUrl || '').trim() ||
-    `${defaultOrigin}/?key=${savedKey}`;
+  const initialEffective = resolveEffectiveSiteAccessConfig(homePoster);
 
-  const [customKey, setCustomKey] = useState(savedKey);
-  const [customUrl, setCustomUrl] = useState(savedCustomUrl);
+  const [currentMode, setCurrentMode] = useState<'link_only' | 'public'>(
+    initialEffective.siteAccessMode
+  );
+  const [customKey, setCustomKey] = useState<string>(initialEffective.siteAccessKey);
+  const [customUrl, setCustomUrl] = useState<string>(
+    initialEffective.siteCustomShareUrl ||
+      buildShareUrlWithKey('', initialEffective.siteAccessKey, defaultOrigin)
+  );
   const [copiedLink, setCopiedLink] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
 
-  useEffect(() => {
-    const k = (homePoster?.siteAccessKey || DEFAULT_SITE_ACCESS_KEY).trim();
-    setCustomKey(k);
-    setCustomUrl(
-      (homePoster?.siteCustomShareUrl || '').trim() || `${defaultOrigin}/?key=${k}`
-    );
-  }, [homePoster?.siteAccessKey, homePoster?.siteCustomShareUrl, defaultOrigin]);
+  const isTypingRef = useRef(false);
 
-  const handleSave = async (
+  useEffect(() => {
+    if (isTypingRef.current) return;
+    const eff = resolveEffectiveSiteAccessConfig(homePoster);
+    setCurrentMode(eff.siteAccessMode);
+    setCustomKey(eff.siteAccessKey);
+    setCustomUrl(
+      eff.siteCustomShareUrl || buildShareUrlWithKey('', eff.siteAccessKey, defaultOrigin)
+    );
+  }, [
+    homePoster?.siteAccessMode,
+    homePoster?.siteAccessKey,
+    homePoster?.siteCustomShareUrl,
+    homePoster?.updatedAt,
+    defaultOrigin,
+  ]);
+
+  const persistAccessSettingsEverywhere = async (
     nextMode: 'link_only' | 'public',
-    nextKeyInput?: string,
-    nextUrlInput?: string
+    nextKeyRaw: string,
+    nextUrlRaw: string,
+    showFeedback = true
   ) => {
-    if (!onSaveHomePoster || !homePoster) return;
-    setIsSaving(true);
-    const cleanKey = (nextKeyInput ?? customKey).trim() || DEFAULT_SITE_ACCESS_KEY;
-    const cleanUrl =
-      (nextUrlInput ?? customUrl).trim() || `${defaultOrigin}/?key=${cleanKey}`;
+    const cleanKey = nextKeyRaw.trim() || DEFAULT_SITE_ACCESS_KEY;
+    const cleanUrl = buildShareUrlWithKey(nextUrlRaw, cleanKey, defaultOrigin);
+    const nowIso = new Date().toISOString();
+
+    if (showFeedback) setIsSaving(true);
 
     try {
-      // Keep current admin session unlocked while editing in Settings
-      sessionStorage.setItem(ACCESS_SESSION_KEY, cleanKey);
-      syncRobotsMetaTags(nextMode);
-      await onSaveHomePoster({
-        ...homePoster,
+      // 1. Immediately persist to localStorage + cookie + broadcast event
+      saveStoredSiteAccessConfig({
         siteAccessMode: nextMode,
         siteAccessKey: cleanKey,
         siteCustomShareUrl: cleanUrl,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       });
-      setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 2000);
+
+      // 2. Keep current admin tab unlocked with the new passcode while in Settings
+      try {
+        sessionStorage.setItem(ACCESS_SESSION_KEY, cleanKey);
+      } catch {}
+
+      syncRobotsMetaTags(nextMode);
+
+      // 3. Persist to backend globalSettings as a lightweight backup
+      fetch('/api/save-global-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          siteAccessMode: nextMode,
+          siteAccessKey: cleanKey,
+          siteCustomShareUrl: cleanUrl,
+          updatedAt: nowIso,
+        }),
+      }).catch(() => {});
+
+      // 4. Persist to homePoster (server ledger + Firestore)
+      if (onSaveHomePoster && homePoster) {
+        await onSaveHomePoster({
+          ...homePoster,
+          siteAccessMode: nextMode,
+          siteAccessKey: cleanKey,
+          siteCustomShareUrl: cleanUrl,
+          updatedAt: nowIso,
+        });
+      }
+
+      if (showFeedback) {
+        setSavedToast(true);
+        setTimeout(() => setSavedToast(false), 2000);
+      }
     } finally {
-      setIsSaving(false);
+      if (showFeedback) setIsSaving(false);
     }
   };
 
   const handleKeyChange = (val: string) => {
+    isTypingRef.current = true;
     setCustomKey(val);
-    if (customUrl.includes('?key=')) {
-      const base = customUrl.split('?key=')[0];
-      setCustomUrl(`${base}?key=${val}`);
+    const trimmedVal = val.trim();
+    const updatedUrl = trimmedVal
+      ? buildShareUrlWithKey(customUrl, trimmedVal, defaultOrigin)
+      : customUrl;
+    if (trimmedVal) {
+      setCustomUrl(updatedUrl);
+      const nowIso = new Date().toISOString();
+      // Immediately activate the new passcode in storage & session so even before clicking Save, this exact passcode is active
+      saveStoredSiteAccessConfig({
+        siteAccessMode: currentMode,
+        siteAccessKey: trimmedVal,
+        siteCustomShareUrl: updatedUrl,
+        updatedAt: nowIso,
+      });
+      try {
+        sessionStorage.setItem(ACCESS_SESSION_KEY, trimmedVal);
+      } catch {}
     }
+    setTimeout(() => {
+      isTypingRef.current = false;
+    }, 800);
+  };
+
+  const handleUrlChange = (val: string) => {
+    isTypingRef.current = true;
+    setCustomUrl(val);
+    // If user changed ?key=... inside the URL box directly, keep the passcode box in sync
+    try {
+      const parsed = new URL(
+        val.trim().startsWith('http')
+          ? val.trim()
+          : `${defaultOrigin}/${val.trim().replace(/^\/+/, '')}`
+      );
+      const keyParam = parsed.searchParams.get('key');
+      if (keyParam && keyParam.trim()) {
+        const cleanK = keyParam.trim();
+        setCustomKey(cleanK);
+        saveStoredSiteAccessConfig({
+          siteAccessMode: currentMode,
+          siteAccessKey: cleanK,
+          siteCustomShareUrl: val.trim(),
+          updatedAt: new Date().toISOString(),
+        });
+        try {
+          sessionStorage.setItem(ACCESS_SESSION_KEY, cleanK);
+        } catch {}
+      }
+    } catch {}
+    setTimeout(() => {
+      isTypingRef.current = false;
+    }, 800);
+  };
+
+  const handleToggleMode = async () => {
+    const nextMode: 'link_only' | 'public' = currentMode === 'link_only' ? 'public' : 'link_only';
+    setCurrentMode(nextMode);
+    await persistAccessSettingsEverywhere(nextMode, customKey, customUrl, true);
+  };
+
+  const handleLockNowClick = async () => {
+    const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+    const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+    setCustomKey(cleanKey);
+    setCustomUrl(cleanUrl);
+    await persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, false);
+    window.dispatchEvent(new CustomEvent('hb_preview_lock_screen'));
   };
 
   const handleCopyLink = () => {
-    navigator.clipboard?.writeText(customUrl.trim()).catch(() => {});
+    const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+    const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+    setCustomUrl(cleanUrl);
+    persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, false).catch(() => {});
+    navigator.clipboard?.writeText(cleanUrl).catch(() => {});
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
+
+  const isPrivate = currentMode === 'link_only';
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-3 sm:px-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -448,7 +698,7 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
         <button
           type="button"
           disabled={isSaving}
-          onClick={() => handleSave(isPrivate ? 'public' : 'link_only')}
+          onClick={handleToggleMode}
           className={`relative inline-flex items-center h-8 rounded-full p-1 transition-colors cursor-pointer border ${
             isPrivate
               ? 'bg-[#cc0000] border-red-700 text-white'
@@ -475,7 +725,7 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
 
         <button
           type="button"
-          onClick={() => window.dispatchEvent(new CustomEvent('hb_preview_lock_screen'))}
+          onClick={handleLockNowClick}
           className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
           title={language === 'lo' ? 'ລັອກໜ້າເວັບດຽວນີ້' : 'Lock Website Now'}
         >
@@ -492,19 +742,29 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
           <input
             type="text"
             value={customUrl}
-            onChange={(e) => setCustomUrl(e.target.value)}
+            onChange={(e) => handleUrlChange(e.target.value)}
             placeholder={language === 'lo' ? 'ຕັ້ງລິ້ງເອງ...' : 'Custom link...'}
             className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-100 outline-none focus:border-[#cc0000]"
           />
         </div>
 
         {/* Editable Custom Passcode / Key */}
-        <div className="relative sm:w-40 shrink-0">
+        <div className="relative sm:w-44 shrink-0">
           <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={customKey}
             onChange={(e) => handleKeyChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+                const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+                setCustomKey(cleanKey);
+                setCustomUrl(cleanUrl);
+                persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, true);
+              }
+            }}
             placeholder={language === 'lo' ? 'ຕັ້ງລະຫັດເອງ...' : 'Custom key...'}
             className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-800 dark:text-slate-100 outline-none focus:border-[#cc0000]"
           />
@@ -515,7 +775,13 @@ export const SiteAccessSettingsBanner: React.FC<SiteAccessSettingsBannerProps> =
           <button
             type="button"
             disabled={isSaving}
-            onClick={() => handleSave(currentMode, customKey, customUrl)}
+            onClick={() => {
+              const cleanKey = customKey.trim() || DEFAULT_SITE_ACCESS_KEY;
+              const cleanUrl = buildShareUrlWithKey(customUrl, cleanKey, defaultOrigin);
+              setCustomKey(cleanKey);
+              setCustomUrl(cleanUrl);
+              persistAccessSettingsEverywhere(currentMode, cleanKey, cleanUrl, true);
+            }}
             className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold text-xs flex items-center gap-1 cursor-pointer transition active:scale-95"
           >
             {savedToast ? (

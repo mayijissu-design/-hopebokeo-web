@@ -15,7 +15,10 @@ import { AboutPosterSettingsSection } from './AboutPosterSettingsSection';
 import { InsightsPosterSettingsSection } from './InsightsPosterSettingsSection';
 import { CommunitiesSettingsSection } from './CommunitiesSettingsSection';
 import { PrayerSettingsSection } from './PrayerSettingsSection';
-import { SiteAccessSettingsBanner } from './SiteAccessControlSection';
+import {
+  SiteAccessSettingsBanner,
+  resolveEffectiveSiteAccessConfig,
+} from './SiteAccessControlSection';
 import { EventReportModal } from './EventReportModal';
 import { formatDateRange } from '../utils/dateFormatter';
 import { compressImageFile, shrinkBase64DataUrl, optimizePosterForFirestore } from '../utils/imageCompressor';
@@ -1327,6 +1330,14 @@ export const AdminTab: React.FC<AdminTabProps> = ({
         missionEn: donationMissionEn || '',
         missionTh: donationMissionTh || '',
         hideVisionMission: hideVisionMissionState,
+        ...(() => {
+          const eff = resolveEffectiveSiteAccessConfig(homePoster);
+          return {
+            siteAccessMode: eff.siteAccessMode,
+            siteAccessKey: eff.siteAccessKey,
+            siteCustomShareUrl: eff.siteCustomShareUrl,
+          };
+        })(),
         updatedAt: new Date().toISOString(),
       };
 
@@ -1556,6 +1567,14 @@ export const AdminTab: React.FC<AdminTabProps> = ({
         missionEn: donationMissionEn || '',
         missionTh: donationMissionTh || '',
         hideVisionMission: hideVisionMissionState,
+        ...(() => {
+          const eff = resolveEffectiveSiteAccessConfig(homePoster);
+          return {
+            siteAccessMode: eff.siteAccessMode,
+            siteAccessKey: eff.siteAccessKey,
+            siteCustomShareUrl: eff.siteCustomShareUrl,
+          };
+        })(),
       };
 
       updated = await optimizePosterForFirestore(updated);

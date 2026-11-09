@@ -1273,6 +1273,16 @@ app.post('/api/save-global-settings', async (req, res) => {
         updatedAt: nowIso,
       };
     }
+    if ((typeof gData.siteAccessKey === 'string' || typeof gData.siteAccessMode === 'string') && dbData.homePoster) {
+      dbData.homePoster = {
+        ...dbData.homePoster,
+        ...(typeof gData.siteAccessMode === 'string' ? { siteAccessMode: gData.siteAccessMode } : {}),
+        ...(typeof gData.siteAccessKey === 'string' ? { siteAccessKey: gData.siteAccessKey } : {}),
+        ...(typeof gData.siteCustomShareUrl === 'string' ? { siteCustomShareUrl: gData.siteCustomShareUrl } : {}),
+        updatedAt: nowIso,
+      };
+      broadcastRealtimeUpdate('homePoster', dbData.homePoster);
+    }
     writeMinistryLedger(dbData);
     broadcastRealtimeUpdate('globalSettings', dbData.globalSettings);
     setDoc(doc(db, 'app_config', 'globalSettings'), dbData.globalSettings, { merge: true }).catch(() => {});

@@ -14,7 +14,11 @@ import { AutoUpdateListener } from './components/AutoUpdateListener';
 import { HbLogo } from './components/HbLogo';
 import { NetworkStatusBar } from './components/NetworkStatusBar';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
-import { SiteAccessGate } from './components/SiteAccessControlSection';
+import {
+  SiteAccessGate,
+  resolveEffectiveSiteAccessConfig,
+  saveStoredSiteAccessConfig,
+} from './components/SiteAccessControlSection';
 import { Village, EventData, TeamMember, HomePoster, DonationInfo, Language, BankAccount } from './types';
 import { Sparkles, X, Loader2, WifiOff, Lock } from 'lucide-react';
 import { db, collection, doc, onSnapshot } from './lib/firebase';
@@ -170,6 +174,11 @@ function sanitizeClientHomePoster(raw?: HomePoster): HomePoster | undefined {
         : [],
     }));
   }
+
+  const effectiveAccess = resolveEffectiveSiteAccessConfig(poster);
+  poster.siteAccessMode = effectiveAccess.siteAccessMode;
+  poster.siteAccessKey = effectiveAccess.siteAccessKey;
+  poster.siteCustomShareUrl = effectiveAccess.siteCustomShareUrl;
 
   return poster;
 }
@@ -710,6 +719,17 @@ export default function App() {
             }
           } catch {}
         }
+        if (typeof g.siteAccessKey === 'string' && g.siteAccessKey.trim()) {
+          const currentAccess = resolveEffectiveSiteAccessConfig();
+          if (shouldAcceptRemoteUpdate(g.updatedAt, currentAccess.updatedAt)) {
+            saveStoredSiteAccessConfig({
+              siteAccessMode: g.siteAccessMode === 'public' ? 'public' : 'link_only',
+              siteAccessKey: g.siteAccessKey.trim(),
+              siteCustomShareUrl: typeof g.siteCustomShareUrl === 'string' ? g.siteCustomShareUrl : currentAccess.siteCustomShareUrl,
+              updatedAt: g.updatedAt || new Date().toISOString(),
+            });
+          }
+        }
       }
     };
 
@@ -743,8 +763,12 @@ export default function App() {
   const handleSaveHomePoster = async (poster: HomePoster) => {
     try {
       setIsSyncing(true);
+      const effectiveAccess = resolveEffectiveSiteAccessConfig(poster);
       const stampedPoster: HomePoster = {
         ...poster,
+        siteAccessMode: poster.siteAccessMode || effectiveAccess.siteAccessMode,
+        siteAccessKey: poster.siteAccessKey || effectiveAccess.siteAccessKey,
+        siteCustomShareUrl: poster.siteCustomShareUrl ?? effectiveAccess.siteCustomShareUrl,
         updatedAt: new Date().toISOString(),
       };
       setHomePoster(stampedPoster);
